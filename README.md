@@ -64,9 +64,11 @@ La privada se bloquea manualmente, al volver a Normal, al cerrar, al abrir otra 
 
 Cambiar contraseña requiere la contraseña actual. No hay recuperación de contraseña. Respalda la carpeta .black-cobble-private completa, incluidos los archivos de recuperación si existen. El formato es un contenedor autenticado con AES-256-GCM y clave aleatoria protegida mediante scrypt. Desbloquear no exporta archivos descifrados.
 
-Esta primera implementación admite **16 MiB en total** de notas, carpetas y borradores privados antes del cifrado. Guarda una instantánea cifrada completa por operación. La existencia y el tamaño del contenedor son visibles. No protege una sesión desbloqueada frente a malware, ni elimina copias antiguas, el portapapeles o restos en la memoria del sistema. Cambiar la contraseña no invalida respaldos antiguos protegidos con la contraseña anterior.
+Esta primera implementación admite **16 MiB en total** de notas, carpetas y borradores privados antes del cifrado. Al desbloquear, las versiones de los archivos de recuperación se incorporan como borradores mientras caben; las que no caben siguen cifradas en disco y se incorporan en un desbloqueo posterior, cuando haya espacio. Guarda una instantánea cifrada completa por operación. La existencia y el tamaño del contenedor son visibles. No protege una sesión desbloqueada frente a malware, ni elimina copias antiguas, el portapapeles o restos en la memoria del sistema. Cambiar la contraseña no invalida respaldos antiguos protegidos con la contraseña anterior.
 
 La eliminación dentro de la bóveda privada es permanente y pide confirmación. No envía notas descifradas a la papelera del sistema. Las notas normales siguen usando la papelera del sistema.
+
+Una nota puede ocupar hasta 32 MiB en disco; una nota cifrada, hasta 16 MiB de texto. Un guardado que supere el límite se rechaza y conserva el archivo anterior.
 
 ### Formato privado anterior
 

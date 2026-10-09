@@ -148,6 +148,34 @@ describe('whole private vault', () => {
     await other.dispose(); const reopenedId = await reopen(); const drafts = await vault.listPrivateDrafts(reopenedId);
     expect(drafts).toHaveLength(1); expect((await vault.recoverPrivateDraft(drafts[0].id, reopenedId)).content).toBe('Conflict private content');
   });
+  it('unlocks when recovered versions do not fit and keeps them sealed until they do', async () => {
+    const MiB = 1024 * 1024;
+    const id = await open(); let note = await vault.createNote('', 'Grande');
+    note = await vault.writeNote(note.path, 'a'.repeat(9 * MiB), note.version, id);
+    // Another writer replaces the same note with a different 9 MiB version.
+    const other = new EncryptedVault(root, { watch: false }); services.push(other); await other.initialize(); const otherStatus = await other.unlockPrivateSession(password);
+    await other.writeNote(note.path, 'b'.repeat(9 * MiB), (await other.readNote(note.path)).version, otherStatus.sessionId!); await other.dispose();
+    await expect(vault.savePrivateDraft(note.path, 'borrador', note.version, 1, id)).rejects.toThrow('CONFLICT');
+    expect(await vault.retryPersistPrivateDrafts()).toBe(true);
+    const recoveryFiles = async () => (await fs.readdir(path.join(root, PRIVATE_CHILD))).filter(file => file.startsWith('recovery-'));
+    expect(await recoveryFiles()).toHaveLength(1);
+
+    // Both 9 MiB versions exceed 16 MiB together: unlock still works and the large version stays on disk.
+    let reopenedId = await reopen();
+    expect(vault.getPrivateSession()).toMatchObject({ unlocked: true, recoveryPending: 1 });
+    expect(await recoveryFiles()).toHaveLength(1);
+    expect((await vault.readNote(note.path)).content).toBe('b'.repeat(9 * MiB));
+    expect((await vault.listPrivateDrafts(reopenedId)).length).toBe(1);
+
+    // Once there is room, the next unlock incorporates the rest and only then deletes the file.
+    const current = await vault.readNote(note.path); await vault.writeNote(note.path, 'pequeña', current.version, reopenedId);
+    await vault.lockPrivateSession(); reopenedId = (await vault.unlockPrivateSession(password)).sessionId!;
+    expect(vault.getPrivateSession().recoveryPending).toBeUndefined();
+    expect(await recoveryFiles()).toHaveLength(0);
+    const drafts = await vault.listPrivateDrafts(reopenedId); expect(drafts).toHaveLength(2);
+    const contents = await Promise.all(drafts.map(async draft => (await vault.recoverPrivateDraft(draft.id, reopenedId)).content.length));
+    expect(contents.sort((x, y) => x - y)).toEqual(['borrador'.length, 9 * MiB]);
+  }, 120_000);
   it('rejects cross-vault paths and private tokens on normal writes', async () => {
     const publicNote = await vault.createNote('', 'Public'); const id = await open(); await vault.createNote('', 'Private');
     await vault.selectMode('normal'); expect(vault.getPrivateSession().unlocked).toBe(false);

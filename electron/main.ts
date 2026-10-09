@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { VaultWorkspace } from './vault-workspace';
 import { PrivateSessionTimer } from './session-timer';
 import type { NoteDocument, PrivateSessionStatus, VaultInfo } from '../shared/types';
-import type { NoteFormat } from '../shared/notes';
+import { MAX_NOTE_BYTES, type NoteFormat } from '../shared/notes';
 
 let window: BrowserWindow | null = null;
 let vault: VaultWorkspace | null = null;
@@ -173,7 +173,8 @@ function noteFormatArgument(value: unknown): NoteFormat {
   return value;
 }
 function content(value: unknown): string {
-  if (typeof value !== 'string' || value.length > 16 * 1024 * 1024) throw new Error('La nota es demasiado grande.');
+  // Every UTF-16 unit takes at least one UTF-8 byte; storage checks the exact size before writing.
+  if (typeof value !== 'string' || value.length > MAX_NOTE_BYTES) throw new Error('La nota es demasiado grande.');
   return value;
 }
 
