@@ -8,7 +8,7 @@ import { tags } from '@lezer/highlight';
 import { syntaxHighlighting, HighlightStyle, indentOnInput, ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { autocompletion, closeCompletion, completionKeymap, type CompletionContext, type Completion } from '@codemirror/autocomplete';
 import { isCodePosition, livePreview, previewOptions } from './livePreview';
-import { headingKey, parseWikiLink } from './wikilinks';
+import { headingKey, parseWikiLink, wikiTargetFor } from './wikilinks';
 import { linkTargetFor } from '../../shared/notes';
 import './editor.css';
 
@@ -36,17 +36,18 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.url, color: 'var(--accent)' },
 ]);
 
-export function wikiCompletions(context: CompletionContext, paths: string[]) {
+export function wikiCompletions(context: CompletionContext, paths: string[], currentPath = '') {
   if (isCodePosition(context.state, context.pos)) return null;
   const match = context.matchBefore(/\[\[[^\]\n]*/);
   if (!match || /[|#]/.test(match.text)) return null;
   const options: Completion[] = [...paths].sort().map(path => {
     // HTML targets keep .html: Obsidian only resolves bare names to Markdown notes.
-    const target = linkTargetFor(path);
+    const label = linkTargetFor(path);
     return {
-      label: target,
+      label,
       type: 'text',
       apply(view, _completion, from, to) {
+        const target = wikiTargetFor(path, currentPath, paths);
         const suffix = view.state.doc.sliceString(to, to + 2) === ']]' ? 2 : 0;
         view.dispatch({ changes: { from, to: to + suffix, insert: `${target}]]` }, selection: { anchor: from + target.length + 2 } });
       },
@@ -89,7 +90,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
           options.current.of(previewOptions.of({ sourceMode: configuration.sourceMode, notePath: configuration.notePath, notePaths: configuration.notePaths, privateMode: configuration.privateMode })),
           theme.current.of(EditorView.theme({}, { dark: configuration.theme === 'dark' })),
           livePreview,
-          autocompletion({ override: [context => wikiCompletions(context, latest.current.notePaths)] }),
+          autocompletion({ override: [context => wikiCompletions(context, latest.current.notePaths, latest.current.notePath)] }),
           EditorView.updateListener.of(update => { if (update.docChanged) latest.current.onChange(update.state.doc.toString()); }),
           EditorView.domEventHandlers({
             mousedown(event, editorView) {

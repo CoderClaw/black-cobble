@@ -1,4 +1,4 @@
-import { NOTE_EXTENSIONS, NOTE_FORMATS, isNotePath } from '../../shared/notes';
+import { NOTE_EXTENSIONS, NOTE_FORMATS, isNotePath, linkTargetFor } from '../../shared/notes';
 
 export interface WikiLink {
   path: string;
@@ -98,4 +98,12 @@ export function resolveWikiLink(target: string, currentPath: string, notePaths: 
     if (note) return note;
   }
   return null;
+}
+
+/** Target written for a chosen note: the short form when it reaches that note from here, else a vault path. */
+export function wikiTargetFor(path: string, currentPath: string, notePaths: string[]): string {
+  const short = linkTargetFor(path);
+  if (resolveWikiLink(short, currentPath, notePaths) === path) return short;
+  // A leading slash forces root notes to resolve as paths instead of sibling names.
+  return short.includes('/') ? short : `/${short}`;
 }

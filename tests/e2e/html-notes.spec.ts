@@ -125,4 +125,61 @@ test('opening an HTML note never rewrites it, and undoing an edit restores its e
   } finally { await app.close(); }
 });
 
+test('editing keeps a tricky head, undo survives mode switches and the format chooser moves focus', async () => {
+  // A comment in the head mentions <body>: only the real body may change.
+  const head = '<!doctype html><html><head><!-- ejemplo <body> para documentación --><title>Mi título</title></head><body>';
+  const original = `${head}<p>Texto</p></body></html>`;
+  const { app, page, vault } = await launchVault('boveda-html-modes-', { 'Truco.html': original });
+  const content = (name = 'Truco.html') => readFile(path.join(vault, name), 'utf8').catch(() => '');
+  try {
+    await page.getByRole('button', { name: /^Truco/ }).click();
+    const editor = page.locator('.html-content');
+    await expect(editor.locator('p')).toHaveText('Texto');
+    await expect(editor).not.toContainText('documentación');
+    await editor.locator('p').click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' editado');
+    await expect.poll(() => content()).toBe(`${head}\n<p>Texto editado</p>\n</body></html>`);
+
+    // Visual edit, source and back: undo still reverts it, to the original bytes.
+    await page.getByRole('button', { name: 'Vista en vivo', exact: true }).click();
+    await expect(page.locator('.html-source .cm-content')).toContainText('Texto editado');
+    await page.getByRole('button', { name: 'Código fuente', exact: true }).click();
+    await expect(editor).toBeVisible();
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => content()).toBe(original);
+
+    // Source edit, visual and back: undo reverts it in source mode too.
+    await page.getByRole('button', { name: 'Vista en vivo', exact: true }).click();
+    const source = page.locator('.html-source .cm-content');
+    await expect(source).toBeVisible();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.type('<!-- fin -->');
+    await expect.poll(() => content()).toBe(`${original}<!-- fin -->`);
+    await page.getByRole('button', { name: 'Código fuente', exact: true }).click();
+    await expect(editor.locator('p')).toHaveText('Texto');
+    await page.getByRole('button', { name: 'Vista en vivo', exact: true }).click();
+    await expect(source).toBeVisible();
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => content()).toBe(original);
+    await page.getByRole('button', { name: 'Código fuente', exact: true }).click();
+
+    // Arrow keys move focus with the chosen format, so Space keeps it.
+    await page.getByRole('button', { name: 'Nueva nota', exact: true }).first().click();
+    const dialog = page.getByRole('dialog');
+    await dialog.locator('input').fill('Formato');
+    const markdown = dialog.getByRole('radio', { name: /Markdown/ });
+    const html = dialog.getByRole('radio', { name: /HTML/ });
+    await markdown.click();
+    await page.keyboard.press('ArrowRight');
+    await expect(html).toBeFocused();
+    await expect(html).toHaveAttribute('aria-checked', 'true');
+    await page.keyboard.press('Space');
+    await expect(html).toHaveAttribute('aria-checked', 'true');
+    await dialog.getByRole('button', { name: 'Crear', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => content('Formato.html')).toContain('<title>Formato</title>');
+  } finally { await app.close(); }
+});
+
 declare global { interface Window { __fromHead?: number; __clicked?: number; __onerror?: number; __inline?: number; __href?: number } }
