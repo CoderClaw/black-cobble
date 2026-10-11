@@ -6,6 +6,7 @@ import { VaultWorkspace } from './vault-workspace';
 import { PrivateSessionTimer } from './session-timer';
 import type { NoteDocument, PrivateSessionStatus, VaultInfo } from '../shared/types';
 import { MAX_NOTE_BYTES, type NoteFormat } from '../shared/notes';
+import { MAX_QUERY_LENGTH, MAX_REPLACE_TARGETS, MAX_SEARCH_MATCHES, type ReplaceTarget, type SearchOptions } from '../shared/search';
 
 let window: BrowserWindow | null = null;
 let vault: VaultWorkspace | null = null;
@@ -184,6 +185,31 @@ function version(value: unknown): string {
   return result;
 }
 
+function searchOptions(value: unknown): SearchOptions {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Argumento no válido.');
+  const { query, matchCase, wholeWord, regex, include, exclude } = value as Record<string, unknown>;
+  if (typeof matchCase !== 'boolean' || typeof wholeWord !== 'boolean' || typeof regex !== 'boolean') throw new Error('Argumento no válido.');
+  return { query: string(query, MAX_QUERY_LENGTH), matchCase, wholeWord, regex, include: include === undefined ? undefined : string(include, MAX_QUERY_LENGTH), exclude: exclude === undefined ? undefined : string(exclude, MAX_QUERY_LENGTH) };
+}
+
+function replaceTargets(value: unknown): ReplaceTarget[] {
+  if (!Array.isArray(value) || value.length > MAX_REPLACE_TARGETS) throw new Error('Argumento no válido.');
+  let total = 0;
+  return value.map(item => {
+    if (!item || typeof item !== 'object') throw new Error('Argumento no válido.');
+    const { path: input, version: expected, matches } = item as Record<string, unknown>;
+    const target: ReplaceTarget = { path: string(input), version: version(expected) };
+    if (matches === undefined) return target;
+    if (!Array.isArray(matches) || (total += matches.length) > MAX_SEARCH_MATCHES) throw new Error('Argumento no válido.');
+    target.matches = matches.map(range => {
+      const { start, end } = (range ?? {}) as Record<string, unknown>;
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || (start as number) < 0 || (end as number) <= (start as number)) throw new Error('Argumento no válido.');
+      return { start: start as number, end: end as number };
+    });
+    return target;
+  });
+}
+
 function session(value: unknown, source: VaultWorkspace): string {
   inactivity.check();
   if (source.info.kind !== 'private') throw new Error('Selecciona la bóveda privada.');
@@ -305,6 +331,16 @@ function handlers(): void {
   handle('vault:write', (input, draft, expected, token) => {
     if (token !== undefined) return privateOperation(token, (source, id) => source.writeNote(string(input), content(draft), version(expected), id));
     return documentOperation(source => source.writeNote(string(input), content(draft), version(expected)));
+  });
+  handle('vault:search', (options, token) => {
+    const value = searchOptions(options);
+    if (token !== undefined) return privateOperation(token, (source, id) => source.searchNotes(value, id));
+    return vaultOperation(source => source.searchNotes(value));
+  });
+  handle('vault:replace', (options, replacement, targets, token) => {
+    const value = searchOptions(options); const text = string(replacement, MAX_QUERY_LENGTH); const list = replaceTargets(targets);
+    if (token !== undefined) return privateOperation(token, (source, id) => source.replaceInNotes(value, text, list, id));
+    return vaultOperation(source => source.replaceInNotes(value, text, list));
   });
   handle('vault:create-note', (parent, name, format) => documentOperation(source => source.createNote(string(parent), string(name), noteFormatArgument(format))));
   handle('vault:create-folder', (parent, name) => vaultOperation(source => source.createFolder(string(parent), string(name))));

@@ -1,4 +1,5 @@
 import type { NoteFormat } from './notes';
+import type { ReplaceOutcome, ReplaceTarget, SearchOptions, SearchResult } from './search';
 
 export interface VaultInfo { name: string; path: string; kind?: 'normal' | 'private'; parentPath?: string }
 export interface VaultEntry { name: string; path: string; type: 'file' | 'folder'; children?: VaultEntry[]; encrypted?: boolean }
@@ -18,6 +19,10 @@ export interface VaultAPI {
   moveEntry(path: string, destinationFolder: string): Promise<string>;
   trashEntry(path: string): Promise<void>;
   openExternal(url: string): Promise<void>;
+  /** Scans the active vault; a private vault needs its session id. Invalid regexes reject with a Spanish message. */
+  searchNotes(options: SearchOptions, sessionId?: string): Promise<SearchResult>;
+  /** Re-matches each target at its expected version and rewrites it; conflicts are reported per file. */
+  replaceInNotes(options: SearchOptions, replacement: string, targets: ReplaceTarget[], sessionId?: string): Promise<ReplaceOutcome[]>;
   onVaultChanged(callback: () => void): () => void;
   onBeforeClose(callback: () => void): () => void;
   confirmClose(): void;

@@ -4,17 +4,18 @@ import StarterKit from '@tiptap/starter-kit';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TableKit } from '@tiptap/extension-table';
 import Image from '@tiptap/extension-image';
-import { Compartment, EditorState, Transaction } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { html } from '@codemirror/lang-html';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { AlignCenter, AlignLeft, AlignRight, Bold, Code, Heading1, Heading2, Heading3, Italic, List, ListChecks, ListOrdered, Minus, Quote, Redo2, SquareCode, Strikethrough, Table, Undo2 } from 'lucide-react';
-import type { MarkdownEditorProps as NoteEditorProps } from './MarkdownEditor';
+import { editedText, revealRange, syncDocument, type MarkdownEditorProps as NoteEditorProps } from './MarkdownEditor';
 import { safeImageSource } from './livePreview';
 import { headingKey, parseWikiLink, resolveWikiLink, wikiTargetFor } from './wikilinks';
 import { WikiLink, wikiLinkRefresh } from './htmlWikiLinks';
 import { HtmlTextAlign, blockAlignment } from './htmlAlign';
+import { searchPattern } from '../../shared/search';
 import { formatHtmlBlocks, joinHtmlDocument, splitHtmlDocument, type HtmlDocumentParts } from './htmlDocument';
 import './editor.css';
 
@@ -37,6 +38,13 @@ export default function HtmlEditor(props: NoteEditorProps) {
 function useActivation(active: boolean) {
   const shown = useRef(active);
   return () => { const activated = active && !shown.current; shown.current = active; return activated; };
+}
+
+/** Ranges of `needle` in `text`, matching any run of whitespace loosely as the HTML parser collapses it. */
+export function textOccurrences(text: string, needle: string): Array<[number, number]> {
+  const source = needle.trim().split(/\s+/u).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+  if (!source) return [];
+  return [...text.matchAll(new RegExp(source, 'gu'))].map(match => [match.index, match.index + match[0].length]);
 }
 
 function openLink(anchor: HTMLAnchorElement, onNavigate: (target: string) => void) {
@@ -158,6 +166,42 @@ function RichHtmlEditor(props: ModeProps) {
     if (position !== null) editor.chain().focus().setTextSelection(position).scrollIntoView().run();
   }, [props.focusHeading, props.notePath, props.navigationId]);
 
+  useEffect(() => {
+    const editor = editorRef.current;
+    const reveal = props.reveal;
+    if (!editor || editor.isDestroyed || !props.active || !reveal?.text || reveal.path !== props.notePath) return;
+    // Raw file offsets do not map to the visual document: run the search again in each textblock and
+    // take the ordinal-th match with the same text, as the panel counted them.
+    let pattern: RegExp | null = null;
+    try { pattern = reveal.options ? searchPattern(reveal.options) : null; } catch { /* Fall back to the literal text. */ }
+    const found = (text: string): Array<[number, number]> => pattern
+      ? [...text.matchAll(pattern)].filter(match => match[0] && match[0].replace(/\s+/g, ' ') === reveal.text).map(match => [match.index, match.index + match[0].length])
+      : textOccurrences(text, reveal.text);
+    const collect = (find: (text: string) => Array<[number, number]>) => {
+      const ranges: Array<{ from: number; to: number }> = [];
+      editor.state.doc.descendants((node, position) => {
+        if (!node.isTextblock) return true;
+        let text = ''; const starts: number[] = [];
+        node.forEach((child, offset) => {
+          const piece = child.isText ? child.text ?? '' : '\ufffc';
+          for (let index = 0; index < piece.length; index++) starts.push(position + 1 + offset + (child.isText ? index : 0));
+          text += piece;
+        });
+        for (const [from, to] of find(text)) ranges.push({ from: starts[from], to: starts[to - 1] + 1 });
+        return false;
+      });
+      return ranges;
+    };
+    let ranges = collect(found);
+    if (!ranges.length && pattern) ranges = collect(text => textOccurrences(text, reveal.text));
+    const range = ranges[Math.min(reveal.ordinal, ranges.length - 1)];
+    if (!range) return;
+    editor.chain().focus().setTextSelection(range).run();
+    const scroller = container.current;
+    const start = editor.view.coordsAtPos(range.from);
+    if (scroller) { const box = scroller.getBoundingClientRect(); scroller.scrollTop += start.top - box.top - scroller.clientHeight / 2; }
+  }, [props.reveal?.id, props.notePath]);
+
   const editor = editorRef.current;
   const tool = (label: string, icon: ReactNode, run: (chain: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>, active?: boolean | string | [string, Record<string, unknown>]) => {
     const pressed = !!editor && active !== undefined && (typeof active === 'boolean' ? active : typeof active === 'string' ? editor.isActive(active) : editor.isActive(active[0], active[1]));
@@ -222,7 +266,10 @@ function HtmlSourceEditor(props: ModeProps) {
         EditorView.lineWrapping,
         EditorView.contentAttributes.of({ 'aria-label': 'Código HTML de la nota', spellcheck: 'false' }),
         theme.current.of(EditorView.theme({}, { dark: props.theme === 'dark' })),
-        EditorView.updateListener.of(update => { if (update.docChanged) latest.current.onChange(update.state.doc.toString()); }),
+        EditorView.updateListener.of(update => {
+          const text = update.docChanged ? editedText(update, latest.current.value) : null;
+          if (text !== null) latest.current.onChange(text);
+        }),
       ] }),
     });
     view.current = editor;
@@ -235,19 +282,14 @@ function HtmlSourceEditor(props: ModeProps) {
     const activated = activation();
     if (!editor || !props.active) return;
     if (activated) { editor.requestMeasure(); editor.focus(); }
-    const current = editor.state.doc.toString();
-    if (current === props.value) return;
-    // Replace only the changed span so the selection and earlier history map cleanly.
-    let from = 0;
-    while (from < current.length && from < props.value.length && current[from] === props.value[from]) from++;
-    let end = 0;
-    while (end < current.length - from && end < props.value.length - from && current[current.length - 1 - end] === props.value[props.value.length - 1 - end]) end++;
-    editor.dispatch({ changes: { from, to: current.length - end, insert: props.value.slice(from, props.value.length - end) }, annotations: Transaction.addToHistory.of(activated) });
+    syncDocument(editor, props.value, activated);
   }, [props.value, props.notePath, props.active]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: theme.current.reconfigure(EditorView.theme({}, { dark: props.theme === 'dark' })) });
   }, [props.theme]);
+
+  useEffect(() => { if (view.current && props.active) revealRange(view.current, props.reveal, props.notePath); }, [props.reveal?.id, props.notePath]);
 
   return <div className="markdown-editor is-source html-source" hidden={!props.active} ref={container} />;
 }

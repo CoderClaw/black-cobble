@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { Compartment, EditorState, Transaction, type Extension } from '@codemirror/state';
-import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor } from '@codemirror/view';
+import { Annotation, Compartment, EditorState, Transaction, type Extension } from '@codemirror/state';
+import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor, type ViewUpdate } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownKeymap } from '@codemirror/lang-markdown';
 import { GFM } from '@lezer/markdown';
@@ -10,8 +10,11 @@ import { autocompletion, closeCompletion, completionKeymap, type CompletionConte
 import { isCodePosition, livePreview, previewOptions } from './livePreview';
 import { headingKey, parseWikiLink, wikiTargetFor } from './wikilinks';
 import { linkTargetFor } from '../../shared/notes';
+import type { SearchOptions } from '../../shared/search';
 import './editor.css';
 
+/** A search match to select: raw offsets for code editors, `text` and its `ordinal` among equal texts for the visual HTML editor. */
+export interface SearchReveal { path: string; from: number; to: number; text: string; ordinal: number; id: number; options?: SearchOptions }
 export interface MarkdownEditorProps {
   value: string;
   onChange: (value: string) => void;
@@ -23,6 +26,7 @@ export interface MarkdownEditorProps {
   theme: 'dark' | 'light';
   focusHeading?: string;
   navigationId?: number;
+  reveal?: SearchReveal;
 }
 
 const markdownHighlightStyle = HighlightStyle.define([
@@ -69,6 +73,38 @@ export function headingPosition(state: EditorState, heading: string): number | n
   return position;
 }
 
+/** Marks transactions that load the note's own value, which must not be reported back as edits. */
+const externalSync = Annotation.define<boolean>();
+
+/** The edited text to report, or null when only the note's own value was loaded. A CRLF note keeps CRLF. */
+export function editedText(update: ViewUpdate, previous: string): string | null {
+  if (!update.transactions.some(transaction => transaction.docChanged && !transaction.annotation(externalSync))) return null;
+  const text = update.state.doc.toString();
+  const crlf = previous.split('\r\n').length - 1;
+  return crlf && crlf * 2 >= previous.split('\n').length - 1 ? text.replace(/\n/g, '\r\n') : text;
+}
+
+/** Replace only the changed span so the selection and earlier history map cleanly. CodeMirror keeps "\n" line breaks. */
+export function syncDocument(editor: EditorView, value: string, addToHistory: boolean) {
+  const next = value.replace(/\r\n?/g, '\n');
+  const current = editor.state.doc.toString();
+  if (current === next) return;
+  let from = 0;
+  while (from < current.length && from < next.length && current[from] === next[from]) from++;
+  let end = 0;
+  while (end < current.length - from && end < next.length - from && current[current.length - 1 - end] === next[next.length - 1 - end]) end++;
+  editor.dispatch({ changes: { from, to: current.length - end, insert: next.slice(from, next.length - end) }, annotations: [Transaction.addToHistory.of(addToHistory), externalSync.of(true)] });
+}
+
+export function revealRange(editor: EditorView, reveal: SearchReveal | undefined, notePath: string) {
+  if (!reveal || reveal.path !== notePath) return;
+  const length = editor.state.doc.length;
+  const from = Math.min(Math.max(reveal.from, 0), length);
+  const to = Math.min(Math.max(reveal.to, from), length);
+  editor.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) });
+  editor.focus();
+}
+
 export default function MarkdownEditor(props: MarkdownEditorProps) {
   const container = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -91,7 +127,10 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
           theme.current.of(EditorView.theme({}, { dark: configuration.theme === 'dark' })),
           livePreview,
           autocompletion({ override: [context => wikiCompletions(context, latest.current.notePaths, latest.current.notePath)] }),
-          EditorView.updateListener.of(update => { if (update.docChanged) latest.current.onChange(update.state.doc.toString()); }),
+          EditorView.updateListener.of(update => {
+            const text = update.docChanged ? editedText(update, latest.current.value) : null;
+            if (text !== null) latest.current.onChange(text);
+          }),
           EditorView.domEventHandlers({
             mousedown(event, editorView) {
               if (event.button !== 0) return false;
@@ -136,12 +175,7 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
     };
   }, [props.notePath]);
 
-  useEffect(() => {
-    const editor = view.current;
-    if (editor && editor.state.doc.toString() !== props.value) {
-      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: props.value }, annotations: Transaction.addToHistory.of(false) });
-    }
-  }, [props.value, props.notePath]);
+  useEffect(() => { if (view.current) syncDocument(view.current, props.value, false); }, [props.value, props.notePath]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: [
@@ -159,6 +193,8 @@ export default function MarkdownEditor(props: MarkdownEditorProps) {
       editor.focus();
     }
   }, [props.focusHeading, props.notePath, props.navigationId]);
+
+  useEffect(() => { if (view.current) revealRange(view.current, props.reveal, props.notePath); }, [props.reveal?.id, props.notePath]);
 
   return <div className={`markdown-editor${props.sourceMode ? ' is-source' : ''}`} ref={container} />;
 }

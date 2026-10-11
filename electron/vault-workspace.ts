@@ -4,6 +4,7 @@ import { EncryptedVault, PRIVATE_CHILD } from './encrypted-vault';
 import { VaultService } from './storage';
 import { isPrivateBytes } from './crypto';
 import { isNotePath, type NoteFormat } from '../shared/notes';
+import type { ReplaceOutcome, ReplaceTarget, SearchOptions, SearchResult } from '../shared/search';
 import type { NoteDocument, PrivateDraftInfo, PrivateSessionStatus, VaultEntry, VaultInfo } from '../shared/types';
 
 type StorageOptions = ConstructorParameters<typeof VaultService>[1];
@@ -28,7 +29,7 @@ export class VaultWorkspace {
     this.legacy = this.normal.getPrivateSession().configured || !!this.normal.getPrivateSession().error;
     // Preserve orphaned legacy recovery records too. Hidden names are never listed.
     try { if ((await fs.readdir(path.join(normal.path, '.black-cobble', 'drafts'))).length) this.legacy = true; } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.legacy = true; }
-    this.privateVault = new EncryptedVault(normal.path, { watch: this.options.watch, onChange: this.options.onChange, onPrivateSessionChanged: () => this.publish() });
+    this.privateVault = new EncryptedVault(normal.path, { watch: this.options.watch, onChange: this.options.onChange, onPrivateSessionChanged: () => this.publish(), search: this.options.search });
     await this.privateVault.initialize(); return this.info;
   }
   private get private(): EncryptedVault { if (!this.privateVault) throw new Error('La bóveda todavía no está abierta.'); return this.privateVault; }
@@ -64,6 +65,12 @@ export class VaultWorkspace {
   private route(...inputs: string[]): void { for (const input of inputs) if (typeof input !== 'string' || input.split(/[\\/]/).some(part => part.startsWith('.'))) throw new Error('Las carpetas internas no son rutas de notas.'); }
   readNote(input: string): Promise<NoteDocument> { this.route(input); return this.active.readNote(input); }
   writeNote(input: string, content: string, expectedVersion: string, id?: string): Promise<NoteDocument> { this.route(input); if (this.mode === 'normal' && id) return Promise.reject(new Error('La sesión pertenece a la bóveda privada.')); return this.active.writeNote(input, content, expectedVersion, id); }
+  searchNotes(options: SearchOptions, id?: string): Promise<SearchResult> { return this.mode === 'private' ? this.private.searchNotes(options, id) : id ? Promise.reject(new Error('La sesión pertenece a la bóveda privada.')) : this.normal.searchNotes(options); }
+  replaceInNotes(options: SearchOptions, replacement: string, targets: ReplaceTarget[], id?: string): Promise<ReplaceOutcome[]> {
+    if (!Array.isArray(targets)) return Promise.reject(new Error('Argumento no válido.'));
+    this.route(...targets.map(target => target?.path));
+    return this.mode === 'private' ? this.private.replaceInNotes(options, replacement, targets, id) : id ? Promise.reject(new Error('La sesión pertenece a la bóveda privada.')) : this.normal.replaceInNotes(options, replacement, targets);
+  }
   createNote(parent: string, name: string, format?: NoteFormat): Promise<NoteDocument> { this.route(parent); return this.active.createNote(parent, name, format); }
   createFolder(parent: string, name: string): Promise<string> { this.route(parent); return this.active.createFolder(parent, name); }
   renameEntry(input: string, name: string): Promise<string> { this.route(input); return this.active.renameEntry(input, name); }

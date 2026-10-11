@@ -38,6 +38,8 @@ try {
   await page.locator('.cm-content').click();
   await page.keyboard.press('Control+End');
   await page.keyboard.insertText('Guardado desde el ejecutable.');
+  const search = await page.evaluate(() => window.vault.searchNotes({ query: 'aplicaci(ó)n', matchCase: false, wholeWord: true, regex: true }));
+  assert.deepEqual(search.files.map(file => [file.path, file.matches.length]), [['Prueba.md', 1]]);
   await page.getByRole('button', { name: 'Privada', exact: true }).click();
   await page.waitForFunction(async () => (await window.vault.getVault())?.kind === 'private');
   const privateResult = await page.evaluate(async () => {
