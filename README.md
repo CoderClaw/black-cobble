@@ -39,6 +39,7 @@ En Linux no hacen falta más requisitos de desarrollo que Node.js 22.12 o poster
 - Abre una carpeta como bóveda. `example-vault` contiene notas de prueba en ambos formatos.
 - Selecciona una carpeta para crear notas o subcarpetas dentro de ella. Pulsa el nombre de la bóveda para seleccionar la raíz.
 - El botón de tres puntos o el clic derecho sobre un archivo permite renombrar, mover o enviar a la papelera. La papelera es la del sistema operativo.
+- El clic derecho sobre una carpeta ofrece «Nueva nota» y «Nueva carpeta», que crean dentro de ella, además de renombrar, mover o enviar a la papelera. En el espacio vacío del árbol o en el nombre de la bóveda, ofrece «Nueva nota» y «Nueva carpeta» en la raíz. El menú se cierra con Esc o al hacer clic fuera.
 - Arrastra notas o carpetas sobre otra carpeta para moverlas. Para llevarlas a la raíz, suéltalas sobre el nombre de la bóveda o en el espacio vacío del árbol. El destino se resalta durante el arrastre. No se permite mover una carpeta dentro de sí misma ni sobrescribir archivos existentes.
 - Escribe Markdown directamente. La línea activa muestra sus marcadores; las demás muestran el formato. Usa el botón `Vista en vivo` para cambiar a código fuente.
 - Escribe `[[` para completar un enlace. Se admiten `[[Nota]]`, `[[Carpeta/Nota]]`, `[[Nota|Alias]]` y `[[Nota#Encabezado]]`. Haz clic para abrirlo, o Ctrl+clic si estás editando esa línea. Un destino inexistente ofrece crear la nota y sus carpetas.
@@ -51,7 +52,8 @@ En Linux no hacen falta más requisitos de desarrollo que Node.js 22.12 o poster
 
 Al crear una nota eliges **Markdown** (compatible con Obsidian, opción por defecto) o **HTML**. La aplicación recuerda la última elección. El formato no cambia después: renombrar conserva la extensión. Una carpeta no puede tener a la vez `Nota.md` y `Nota.html`, para que `[[Nota]]` nunca sea ambiguo.
 
-- Las notas HTML se editan de forma visual, con barra de formato: encabezados, negrita, cursiva, tachado, código, listas, tareas, citas, bloques de código, separadores y tablas. También funcionan atajos como `# `, `**texto**`, `- ` o `[ ] `.
+- Las notas HTML se editan de forma visual, con barra de formato: encabezados, negrita, cursiva, tachado, código, listas, tareas, citas, bloques de código, separadores, tablas y alineación. También funcionan atajos como `# `, `**texto**`, `- ` o `[ ] `.
+- Alinear a la izquierda, centrar o alinear a la derecha se aplica por bloque (párrafo o título, también dentro de listas, citas y tablas): al bloque donde está el cursor o a todos los bloques seleccionados. Botones de la barra o Ctrl+Shift+L / Ctrl+Shift+E / Ctrl+Shift+R (Cmd en macOS). Se guarda como `style="text-align: …"` en el HTML; alinear a la izquierda quita el estilo.
 - `Vista en vivo` cambia al código HTML completo del archivo, incluida la cabecera. Cada vista conserva su historial: lo editado en la otra vista se deshace como un solo paso.
 - Escribe `[[` para enlazar otra nota. En HTML el enlace se guarda como `<a class="wikilink" data-wikilink="Ruta">alias</a>`. Desde una nota Markdown, un enlace a una nota HTML conserva la extensión (`[[Pagina.html]]`) para que Obsidian también lo resuelva.
 - El editor solo modifica el contenido de `<body>`; el doctype y `<head>` se conservan tal cual. Abrir una nota no la reescribe. Al editarla, el cuerpo se guarda con un bloque por línea y se descartan etiquetas, atributos y estilos no admitidos.

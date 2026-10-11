@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight, FileCode2, FileText, Folder, FolderOpen, LockKeyhole } from 'lucide-react';
-import type { DragEvent } from 'react';
+import type { DragEvent, MouseEvent } from 'react';
 import type { VaultEntry } from '../../shared/types';
 import { noteFormat, stripNoteExtension } from '../../shared/notes';
 
@@ -11,7 +11,7 @@ interface Props {
   query: string;
   onSelect: (entry: VaultEntry) => void;
   onToggle: (path: string) => void;
-  onContext: (entry: VaultEntry) => void;
+  onContext: (event: MouseEvent, entry: VaultEntry) => void;
   canDrag: boolean;
   draggingPath: string | null;
   dropPath: string | null;
@@ -35,12 +35,13 @@ export default function FileTree(props: Props) {
           style={{ paddingLeft: 8 + depth * 15 }}
           data-entry-path={entry.path} data-drop-path={folder ? entry.path : undefined}
           draggable={props.canDrag}
+          onContextMenu={event => props.onContext(event, entry)}
           onDragStart={event => props.onDragStart(event, entry.path)} onDragEnd={props.onDragEnd}
           onDragOver={event => props.onDragOver(event, entry.path)}
           onDragLeave={event => { event.stopPropagation(); if (folder) props.onDragLeave(event, entry.path); }}
           onDrop={event => { event.preventDefault(); event.stopPropagation(); if (folder) props.onDrop(event, entry.path); else props.onDragEnd(); }}>
           {folder ? <button className="tree-chevron" aria-label={`${open ? 'Contraer' : 'Expandir'} ${entry.name}`} onClick={() => props.onToggle(entry.path)}>{open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button> : <span className="tree-chevron" />}
-          <button className="tree-entry" title={entry.path} onClick={() => props.onSelect(entry)} onContextMenu={event => { event.preventDefault(); props.onContext(entry); }}>
+          <button className="tree-entry" title={entry.path} onClick={() => props.onSelect(entry)}>
             <Icon size={15} /><span>{folder ? entry.name : stripNoteExtension(entry.name)}</span>{!folder && noteFormat(entry.name) === 'html' && <span className="format-badge">HTML</span>}
           </button>
         </div>

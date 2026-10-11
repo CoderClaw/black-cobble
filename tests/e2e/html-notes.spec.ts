@@ -182,4 +182,117 @@ test('editing keeps a tricky head, undo survives mode switches and the format ch
   } finally { await app.close(); }
 });
 
+test('aligns paragraphs and headings one block at a time from the toolbar and shortcuts', async () => {
+  const head = '<!doctype html><html><head><title>Alinea</title></head><body>';
+  const original = `${head}<p>Base</p></body></html>`;
+  const { app, page, vault } = await launchVault('boveda-html-align-', { 'Alinea.html': original, 'Otra.md': '# Otra\n' });
+  // The schema keeps an empty paragraph after a trailing heading; it is not what these checks are about.
+  const content = async () => (await readFile(path.join(vault, 'Alinea.html'), 'utf8')).replace(/\n<p( style="[^"]*")?><\/p>\n<\/body>/, '\n</body>');
+  const aligned = async () => ((await content()).match(/text-align: \w+/g) ?? []).length;
+  const button = (name: string) => page.getByRole('toolbar', { name: 'Formato' }).getByRole('button', { name, exact: true });
+  const pressed = async (left: string, center: string, right: string) => {
+    await expect(button('Alinear a la izquierda')).toHaveAttribute('aria-pressed', left);
+    await expect(button('Centrar')).toHaveAttribute('aria-pressed', center);
+    await expect(button('Alinear a la derecha')).toHaveAttribute('aria-pressed', right);
+  };
+  try {
+    await page.getByRole('button', { name: /^Alinea/ }).click();
+    const editor = page.locator('.html-content');
+    await expect(editor.locator('p')).toHaveText('Base');
+    await editor.locator('p').click();
+    await page.waitForTimeout(300); // let the initial focus settle before moving the caret
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Segundo');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('## Titulo');
+    await expect(editor.locator('h2')).toHaveText('Titulo');
+    await expect.poll(content).toBe(`${head}\n<p>Base</p>\n<p>Segundo</p>\n<h2>Titulo</h2>\n</body></html>`);
+    await pressed('true', 'false', 'false');
+
+    // A collapsed cursor aligns only its own block.
+    await editor.locator('p', { hasText: 'Segundo' }).click();
+    await button('Centrar').click();
+    await expect.poll(content).toBe(`${head}\n<p>Base</p>\n<p style="text-align: center;">Segundo</p>\n<h2>Titulo</h2>\n</body></html>`);
+    await expect(editor.locator('p', { hasText: 'Segundo' })).toHaveCSS('text-align', 'center');
+    await expect(editor.locator('p', { hasText: 'Base' })).toHaveCSS('text-align', 'start');
+    await pressed('false', 'true', 'false');
+    await editor.locator('h2').click();
+    await pressed('true', 'false', 'false');
+    await button('Alinear a la derecha').click();
+    await expect.poll(content).toContain('<h2 style="text-align: right;">Titulo</h2>');
+    expect(await aligned()).toBe(2);
+
+    // A selection aligns every block it touches.
+    await page.keyboard.press('Control+a');
+    await button('Alinear a la derecha').click();
+    await expect.poll(content).toBe(`${head}\n<p style="text-align: right;">Base</p>\n<p style="text-align: right;">Segundo</p>\n<h2 style="text-align: right;">Titulo</h2>\n</body></html>`);
+    // Left clears the attribute instead of writing a redundant style.
+    await button('Alinear a la izquierda').click();
+    await expect.poll(content).toBe(`${head}\n<p>Base</p>\n<p>Segundo</p>\n<h2>Titulo</h2>\n</body></html>`);
+
+    await page.keyboard.press('Control+Home'); // collapses the selection onto the first block
+    await editor.locator('p', { hasText: 'Base' }).click();
+    await page.keyboard.press('Control+Shift+e');
+    await expect.poll(content).toContain('<p style="text-align: center;">Base</p>');
+    expect(await aligned()).toBe(1);
+    await page.keyboard.press('Control+Shift+r');
+    await expect.poll(content).toContain('<p style="text-align: right;">Base</p>');
+    await page.keyboard.press('Control+Shift+l');
+    await expect.poll(content).toBe(`${head}\n<p>Base</p>\n<p>Segundo</p>\n<h2>Titulo</h2>\n</body></html>`);
+
+    // Reopening shows the saved alignment and does not rewrite the file.
+    await editor.locator('p', { hasText: 'Segundo' }).click();
+    await button('Centrar').click();
+    await expect.poll(aligned).toBe(1);
+    await page.waitForTimeout(900);
+    await expect(page.locator('.note-status')).toContainText('Guardado');
+    const saved = await content();
+    await page.getByRole('button', { name: /^Otra/ }).click();
+    await expect(page.locator('.cm-content')).toContainText('Otra');
+    await page.getByRole('button', { name: /^Alinea/ }).click();
+    await expect(editor.locator('p', { hasText: 'Segundo' })).toHaveCSS('text-align', 'center');
+    await editor.locator('p', { hasText: 'Segundo' }).click();
+    await pressed('false', 'true', 'false');
+    await editor.locator('p', { hasText: 'Base' }).click();
+    await pressed('true', 'false', 'false');
+    await page.waitForTimeout(900);
+    expect(await content()).toBe(saved);
+  } finally { await app.close(); }
+});
+
+test('existing text alignment loads, renders and round-trips, including inside lists and tables', async () => {
+  const original = '<!DOCTYPE html><html><head><title>Estilos</title></head><body><h1 style="text-align: center">T</h1><p style="text-align: right">R</p><p style="text-align: left">L</p><p>N</p><ul><li><p>item</p></li></ul><table><tr><td><p>celda</p></td></tr></table></body></html>';
+  const { app, page, vault } = await launchVault('boveda-html-align-load-', { 'Estilos.html': original });
+  const content = () => readFile(path.join(vault, 'Estilos.html'), 'utf8');
+  try {
+    await page.getByRole('button', { name: /^Estilos/ }).click();
+    const editor = page.locator('.html-content');
+    await expect(editor.locator('h1')).toHaveCSS('text-align', 'center');
+    await expect(editor.locator('p', { hasText: /^R$/ })).toHaveCSS('text-align', 'right');
+    await expect(editor.locator('p', { hasText: /^N$/ })).toHaveCSS('text-align', 'start');
+    await editor.locator('h1').click();
+    await page.waitForTimeout(900);
+    await expect(page.locator('.note-status')).toContainText('Guardado');
+    expect(await content()).toBe(original);
+
+    // An explicit left in the file survives until the user changes it.
+    await editor.locator('p', { hasText: /^N$/ }).click();
+    await page.keyboard.press('End');
+    await page.keyboard.type('X');
+    await expect.poll(content).toContain('<h1 style="text-align: center;">T</h1>\n<p style="text-align: right;">R</p>\n<p style="text-align: left;">L</p>\n<p>NX</p>');
+    await page.keyboard.press('Control+z');
+    await expect.poll(content).toBe(original);
+
+    // Paragraphs inside list items and table cells are aligned too.
+    await page.keyboard.press('Control+a');
+    await page.getByRole('toolbar', { name: 'Formato' }).getByRole('button', { name: 'Centrar', exact: true }).click();
+    await expect.poll(content).toContain('<li><p style="text-align: center;">item</p>');
+    const saved = await content();
+    expect(saved).toContain('<p style="text-align: center;">celda</p>');
+    expect(saved.match(/text-align: center/g)).toHaveLength(7); // includes the empty paragraph the schema appends after the table
+    expect(saved).not.toMatch(/text-align: (left|right)/);
+  } finally { await app.close(); }
+});
+
 declare global { interface Window { __fromHead?: number; __clicked?: number; __onerror?: number; __inline?: number; __href?: number } }

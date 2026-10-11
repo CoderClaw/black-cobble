@@ -9,11 +9,12 @@ import { EditorView, keymap, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { html } from '@codemirror/lang-html';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
-import { Bold, Code, Heading1, Heading2, Heading3, Italic, List, ListChecks, ListOrdered, Minus, Quote, Redo2, SquareCode, Strikethrough, Table, Undo2 } from 'lucide-react';
+import { AlignCenter, AlignLeft, AlignRight, Bold, Code, Heading1, Heading2, Heading3, Italic, List, ListChecks, ListOrdered, Minus, Quote, Redo2, SquareCode, Strikethrough, Table, Undo2 } from 'lucide-react';
 import type { MarkdownEditorProps as NoteEditorProps } from './MarkdownEditor';
 import { safeImageSource } from './livePreview';
 import { headingKey, parseWikiLink, resolveWikiLink, wikiTargetFor } from './wikilinks';
 import { WikiLink, wikiLinkRefresh } from './htmlWikiLinks';
+import { HtmlTextAlign, blockAlignment } from './htmlAlign';
 import { formatHtmlBlocks, joinHtmlDocument, splitHtmlDocument, type HtmlDocumentParts } from './htmlDocument';
 import './editor.css';
 
@@ -87,6 +88,7 @@ function RichHtmlEditor(props: ModeProps) {
         TaskList, TaskItem.configure({ nested: true }),
         TableKit.configure({ table: { resizable: false } }),
         SafeImage.configure({ inline: false, allowBase64: true }),
+        HtmlTextAlign,
         WikiLink.configure({
           resolve: target => resolveWikiLink(target, latest.current.notePath, latest.current.notePaths),
           notePaths: () => latest.current.notePaths,
@@ -157,11 +159,12 @@ function RichHtmlEditor(props: ModeProps) {
   }, [props.focusHeading, props.notePath, props.navigationId]);
 
   const editor = editorRef.current;
-  const tool = (label: string, icon: ReactNode, run: (chain: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>, active?: string | [string, Record<string, unknown>]) => {
-    const pressed = !!editor && active !== undefined && (typeof active === 'string' ? editor.isActive(active) : editor.isActive(active[0], active[1]));
+  const tool = (label: string, icon: ReactNode, run: (chain: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>, active?: boolean | string | [string, Record<string, unknown>]) => {
+    const pressed = !!editor && active !== undefined && (typeof active === 'boolean' ? active : typeof active === 'string' ? editor.isActive(active) : editor.isActive(active[0], active[1]));
     return <button type="button" className="icon-button" title={label} aria-label={label} aria-pressed={active === undefined ? undefined : pressed} disabled={!editor}
       onMouseDown={event => event.preventDefault()} onClick={() => { if (editor) run(editor.chain().focus()).run(); }}>{icon}</button>;
   };
+  const alignment = editor ? blockAlignment(editor.state) : '';
   const inTable = !!editor?.isActive('table');
   return <div className="html-editor" hidden={!props.active}>
     <div className="html-toolbar" role="toolbar" aria-label="Formato">
@@ -173,6 +176,10 @@ function RichHtmlEditor(props: ModeProps) {
       {tool('Título 1', <Heading1 size={15} />, chain => chain.toggleHeading({ level: 1 }), ['heading', { level: 1 }])}
       {tool('Título 2', <Heading2 size={15} />, chain => chain.toggleHeading({ level: 2 }), ['heading', { level: 2 }])}
       {tool('Título 3', <Heading3 size={15} />, chain => chain.toggleHeading({ level: 3 }), ['heading', { level: 3 }])}
+      <span className="toolbar-separator" />
+      {tool('Alinear a la izquierda', <AlignLeft size={15} />, chain => chain.unsetTextAlign(), alignment === 'left')}
+      {tool('Centrar', <AlignCenter size={15} />, chain => chain.setTextAlign('center'), alignment === 'center')}
+      {tool('Alinear a la derecha', <AlignRight size={15} />, chain => chain.setTextAlign('right'), alignment === 'right')}
       <span className="toolbar-separator" />
       {tool('Lista', <List size={15} />, chain => chain.toggleBulletList(), 'bulletList')}
       {tool('Lista numerada', <ListOrdered size={15} />, chain => chain.toggleOrderedList(), 'orderedList')}
