@@ -3,7 +3,7 @@ import type { NoteFormat } from './notes';
 export interface VaultInfo { name: string; path: string; kind?: 'normal' | 'private'; parentPath?: string }
 export interface VaultEntry { name: string; path: string; type: 'file' | 'folder'; children?: VaultEntry[]; encrypted?: boolean }
 export interface NoteDocument { path: string; content: string; version: string; encrypted?: boolean; locked?: boolean; sessionId?: string }
-export interface PrivateSessionStatus { configured: boolean; unlocked: boolean; sessionId: string | null; vaultPath: string; recoveryCount: number; memoryOnlyDrafts: boolean; error?: string }
+export interface PrivateSessionStatus { configured: boolean; unlocked: boolean; sessionId: string | null; vaultPath: string; recoveryCount: number; memoryOnlyDrafts: boolean; recoveryPending?: number; error?: string }
 export interface PrivateDraftInfo { id: string; path: string; updatedAt: number }
 export interface VaultAPI {
   getVault(): Promise<VaultInfo | null>;

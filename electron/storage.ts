@@ -4,9 +4,9 @@ import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import chokidar, { type FSWatcher } from 'chokidar';
 import type { NoteDocument, PrivateSessionStatus, PrivateDraftInfo, VaultEntry, VaultInfo } from '../shared/types';
-import { MAX_PRIVATE_BYTES, isPrivateBytes, parseEnvelope, encryptEnvelope, decryptEnvelope, parseMetadata, wrapKey, unwrapKey, type PrivateMetadata } from './crypto';
+import { isPrivateBytes, parseEnvelope, encryptEnvelope, decryptEnvelope, parseMetadata, wrapKey, unwrapKey, type PrivateMetadata } from './crypto';
 import { rewriteWikiLinks } from '../shared/linkUpdates';
-import { counterpartPaths, initialNoteContent, isNotePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
+import { MAX_NOTE_BYTES, counterpartPaths, initialNoteContent, isNotePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
 
 type StorageOptions = {
   trash?: (absolutePath: string) => Promise<void>;
@@ -20,6 +20,15 @@ function fail(message: string): never { throw new Error(message); }
 function isMissing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
 function versionOf(bytes: Uint8Array): string { return createHash('sha256').update(bytes).digest('hex'); }
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/** A saved note must open again: reject text that would exceed the read limit or change during UTF-8 encoding. */
+function plainBytes(content: string): Buffer {
+  const bytes = Buffer.from(content, 'utf8');
+  // Unpaired UTF-16 surrogates would be silently replaced.
+  if (bytes.toString('utf8') !== content) fail('El texto contiene caracteres no válidos.');
+  if (bytes.length > MAX_NOTE_BYTES) fail(`La nota supera el tamaño máximo de ${MAX_NOTE_BYTES / 1024 / 1024} MiB.`);
+  return bytes;
+}
 
 export class VaultService {
   private root: string;
@@ -195,7 +204,7 @@ export class VaultService {
     try {
       const stat = await handle.stat();
       if (!stat.isFile()) fail('La nota debe ser un archivo.');
-      if (stat.size > MAX_PRIVATE_BYTES * 2) fail('La nota es demasiado grande para abrirse.');
+      if (stat.size > MAX_NOTE_BYTES) fail('La nota es demasiado grande para abrirse.');
       const bytes = await handle.readFile();
       return { path: relative, bytes, version: versionOf(bytes) };
     } finally { await handle.close(); }
@@ -416,8 +425,7 @@ export class VaultService {
       if (current.version !== expectedVersion) fail('CONFLICT: La nota ha cambiado fuera de la aplicación.');
       if (!encrypted && !current.encrypted) fail('La nota ya es pública.');
       const noteId = this.knownPrivate.get(current.path) ?? randomUUID();
-      const bytes = encrypted ? encryptEnvelope(key, this.metadata!.vaultId, noteId, content) : Buffer.from(content);
-      if (!encrypted && bytes.toString('utf8') !== content) fail('El texto contiene caracteres no válidos.');
+      const bytes = encrypted ? encryptEnvelope(key, this.metadata!.vaultId, noteId, content) : plainBytes(content);
       await this.replaceNote(current.path, bytes, expectedVersion, sid); this.requireSession(sid);
       if (encrypted) this.knownPrivate.set(current.path, noteId); else this.knownPrivate.delete(current.path);
       const draft = this.drafts.get(noteId); if (draft?.contentHash === versionOf(Buffer.from(content))) await this.removeDraft(draft);
@@ -532,9 +540,7 @@ export class VaultService {
   writeNote(input: string, content: string, expectedVersion: string, sessionId?: string): Promise<NoteDocument> {
     return this.serialized(async () => {
       if (typeof content !== 'string' || typeof expectedVersion !== 'string') fail('Contenido o versión no válidos.');
-      // Reject unpaired UTF-16 surrogates instead of silently changing the text during UTF-8 encoding.
-      let bytes: Buffer = Buffer.from(content, 'utf8');
-      if (bytes.toString('utf8') !== content) fail('El texto contiene caracteres no válidos.');
+      let bytes: Buffer = plainBytes(content);
       let current: NoteDocument;
       try { current = await this.read(input); }
       catch (error) { if (isMissing(error)) fail('CONFLICT: La nota se ha eliminado o movido fuera de la aplicación.'); throw error; }

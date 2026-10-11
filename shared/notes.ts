@@ -4,6 +4,9 @@ export type NoteFormat = 'md' | 'html';
 export const NOTE_FORMATS: readonly NoteFormat[] = ['md', 'html'];
 export const NOTE_EXTENSIONS: Record<NoteFormat, string> = { md: '.md', html: '.html' };
 
+/** Largest note file the app opens or saves, in bytes. Encrypted notes hold up to half of it as text. */
+export const MAX_NOTE_BYTES = 32 * 1024 * 1024;
+
 export function noteFormat(path: string): NoteFormat | null {
   if (/\.md$/i.test(path)) return 'md';
   if (/\.html$/i.test(path)) return 'html';

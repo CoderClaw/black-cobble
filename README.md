@@ -46,7 +46,7 @@ El resultado se guarda en `release/Black Cobble 0.1.1.exe`. No requiere instalar
 Al crear una nota eliges **Markdown** (compatible con Obsidian, opción por defecto) o **HTML**. La aplicación recuerda la última elección. El formato no cambia después: renombrar conserva la extensión. Una carpeta no puede tener a la vez `Nota.md` y `Nota.html`, para que `[[Nota]]` nunca sea ambiguo.
 
 - Las notas HTML se editan de forma visual, con barra de formato: encabezados, negrita, cursiva, tachado, código, listas, tareas, citas, bloques de código, separadores y tablas. También funcionan atajos como `# `, `**texto**`, `- ` o `[ ] `.
-- `Vista en vivo` cambia al código HTML completo del archivo, incluida la cabecera.
+- `Vista en vivo` cambia al código HTML completo del archivo, incluida la cabecera. Cada vista conserva su historial: lo editado en la otra vista se deshace como un solo paso.
 - Escribe `[[` para enlazar otra nota. En HTML el enlace se guarda como `<a class="wikilink" data-wikilink="Ruta">alias</a>`. Desde una nota Markdown, un enlace a una nota HTML conserva la extensión (`[[Pagina.html]]`) para que Obsidian también lo resuelva.
 - El editor solo modifica el contenido de `<body>`; el doctype y `<head>` se conservan tal cual. Abrir una nota no la reescribe. Al editarla, el cuerpo se guarda con un bloque por línea y se descartan etiquetas, atributos y estilos no admitidos.
 - El HTML de las notas se trata como contenido no confiable: nunca se ejecutan scripts ni manejadores de eventos, y no se cargan formularios ni marcos. Las imágenes siguen las mismas reglas que en Markdown.
@@ -64,9 +64,11 @@ La privada se bloquea manualmente, al volver a Normal, al cerrar, al abrir otra 
 
 Cambiar contraseña requiere la contraseña actual. No hay recuperación de contraseña. Respalda la carpeta .black-cobble-private completa, incluidos los archivos de recuperación si existen. El formato es un contenedor autenticado con AES-256-GCM y clave aleatoria protegida mediante scrypt. Desbloquear no exporta archivos descifrados.
 
-Esta primera implementación admite **16 MiB en total** de notas, carpetas y borradores privados antes del cifrado. Guarda una instantánea cifrada completa por operación. La existencia y el tamaño del contenedor son visibles. No protege una sesión desbloqueada frente a malware, ni elimina copias antiguas, el portapapeles o restos en la memoria del sistema. Cambiar la contraseña no invalida respaldos antiguos protegidos con la contraseña anterior.
+Esta primera implementación admite **16 MiB en total** de notas, carpetas y borradores privados antes del cifrado. Al desbloquear, las versiones de los archivos de recuperación se incorporan como borradores mientras caben; las que no caben siguen cifradas en disco y se incorporan en un desbloqueo posterior, cuando haya espacio. Guarda una instantánea cifrada completa por operación. La existencia y el tamaño del contenedor son visibles. No protege una sesión desbloqueada frente a malware, ni elimina copias antiguas, el portapapeles o restos en la memoria del sistema. Cambiar la contraseña no invalida respaldos antiguos protegidos con la contraseña anterior.
 
 La eliminación dentro de la bóveda privada es permanente y pide confirmación. No envía notas descifradas a la papelera del sistema. Las notas normales siguen usando la papelera del sistema.
+
+Una nota puede ocupar hasta 32 MiB en disco; una nota cifrada, hasta 16 MiB de texto. Un guardado que supere el límite se rechaza y conserva el archivo anterior.
 
 ### Formato privado anterior
 

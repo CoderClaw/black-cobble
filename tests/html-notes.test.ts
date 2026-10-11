@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { counterpartPaths, initialNoteContent, linkTargetFor, noteFormat, withNoteExtension } from '../shared/notes';
 import { rewriteWikiLinks } from '../shared/linkUpdates';
-import { resolveWikiLink, wikiLinkLabelRange } from '../src/editor/wikilinks';
+import { resolveWikiLink, wikiLinkLabelRange, wikiTargetFor } from '../src/editor/wikilinks';
 import { VaultService } from '../electron/storage';
 import { VaultWorkspace } from '../electron/vault-workspace';
 import { formatHtmlBlocks, joinHtmlDocument, splitHtmlDocument } from '../src/editor/htmlDocument';
@@ -42,6 +42,16 @@ describe('wikilinks across formats', () => {
     expect(resolveWikiLink('Pagina.md', 'X.md', notes)).toBeNull();
     expect(resolveWikiLink('Guia', 'X.md', notes)).toBe('Docs/Guia.html');
     expect(resolveWikiLink('./Guia2', 'Docs/Guia.html', notes)).toBe('Docs/Guia2.md');
+  });
+  it('completes every note with a target that resolves back to it', () => {
+    const paths = ['Nota.md', 'sub/Nota.md', 'sub/Origen.md', 'Web.html', 'sub/Web.html', 'otra/sub/Nota.md'];
+    expect(wikiTargetFor('Nota.md', 'sub/Origen.md', paths)).toBe('/Nota');
+    expect(wikiTargetFor('Web.html', 'sub/Origen.md', paths)).toBe('/Web.html');
+    expect(wikiTargetFor('sub/Nota.md', 'sub/Origen.md', paths)).toBe('sub/Nota');
+    expect(wikiTargetFor('Nota.md', 'Raiz.md', paths)).toBe('Nota');
+    for (const source of [...paths, 'Raiz.md', 'otra/X.html']) {
+      for (const note of paths) expect(resolveWikiLink(wikiTargetFor(note, source, paths), source, paths), `${note} from ${source}`).toBe(note);
+    }
   });
   it('hides either extension from the visible label', () => {
     const target = 'Docs/Guia.html';
@@ -133,6 +143,22 @@ describe('HTML document helpers', () => {
     expect(joinHtmlDocument(parts, '<p>a</p>')).toBe(content);
     expect(splitHtmlDocument('<p>fragmento</p>')).toEqual({ before: '', body: '<p>fragmento</p>', after: '' });
     expect(joinHtmlDocument(splitHtmlDocument('<p>x</p>'), '<p>y</p>')).toBe('<p>y</p>');
+  });
+
+  it('finds the real body, never a tag-like string in comments, scripts or attributes', () => {
+    const head = '<!doctype html><html><head><!-- ejemplo <body> para documentación --><title>Mi título</title><meta content="<body>"></head><body>';
+    const tail = '</body></html>';
+    const body = '<p>Texto</p><script>var s = "</body>"</script>';
+    expect(splitHtmlDocument(head + body + tail)).toEqual({ before: head, body, after: tail });
+    // A stray </body> after a comment that mentions it still ends the body at the real tag.
+    expect(splitHtmlDocument('<body><p>a</p></body>\n<!-- </body> -->\n</html>\n').after).toBe('</body>\n<!-- </body> -->\n</html>\n');
+  });
+
+  it('keeps the head of a document without a <body> tag outside the editable body', () => {
+    const content = '<!doctype html><html><head><title>T</title></head><p>sin body</p></html>\n';
+    expect(splitHtmlDocument(content)).toEqual({ before: '<!doctype html><html><head><title>T</title></head>', body: '<p>sin body</p>', after: '</html>\n' });
+    expect(splitHtmlDocument('<!-- c --><title>x</title><p>y</p>')).toEqual({ before: '<!-- c --><title>x</title>', body: '<p>y</p>', after: '' });
+    expect(splitHtmlDocument('<!doctype html><html><head></head></html>')).toEqual({ before: '<!doctype html><html><head></head>', body: '', after: '</html>' });
   });
 
   it('puts one block per line without touching inline or preformatted text', () => {

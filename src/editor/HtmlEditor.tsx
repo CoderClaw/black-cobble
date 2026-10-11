@@ -12,14 +12,30 @@ import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { Bold, Code, Heading1, Heading2, Heading3, Italic, List, ListChecks, ListOrdered, Minus, Quote, Redo2, SquareCode, Strikethrough, Table, Undo2 } from 'lucide-react';
 import type { MarkdownEditorProps as NoteEditorProps } from './MarkdownEditor';
 import { safeImageSource } from './livePreview';
-import { headingKey, parseWikiLink, resolveWikiLink } from './wikilinks';
+import { headingKey, parseWikiLink, resolveWikiLink, wikiTargetFor } from './wikilinks';
 import { WikiLink, wikiLinkRefresh } from './htmlWikiLinks';
-import { formatHtmlBlocks, joinHtmlDocument, splitHtmlDocument } from './htmlDocument';
+import { formatHtmlBlocks, joinHtmlDocument, splitHtmlDocument, type HtmlDocumentParts } from './htmlDocument';
 import './editor.css';
 
-/** HTML notes: a visual editor for the body, or CodeMirror over the whole file in source mode. */
+type ModeProps = NoteEditorProps & { active: boolean };
+
+/**
+ * HTML notes: a visual editor for the body, or CodeMirror over the whole file in source mode.
+ * Both stay mounted once used, so switching modes keeps each one's undo history and selection.
+ */
 export default function HtmlEditor(props: NoteEditorProps) {
-  return props.sourceMode ? <HtmlSourceEditor {...props} /> : <RichHtmlEditor {...props} />;
+  const [sourceUsed, setSourceUsed] = useState(props.sourceMode);
+  if (props.sourceMode && !sourceUsed) setSourceUsed(true);
+  return <>
+    <RichHtmlEditor {...props} active={!props.sourceMode} />
+    {sourceUsed && <HtmlSourceEditor {...props} active={props.sourceMode} />}
+  </>;
+}
+
+/** Changes made in the other mode become one undoable step; reloads while a mode is shown do not. */
+function useActivation(active: boolean) {
+  const shown = useRef(active);
+  return () => { const activated = active && !shown.current; shown.current = active; return activated; };
 }
 
 function openLink(anchor: HTMLAnchorElement, onNavigate: (target: string) => void) {
@@ -34,20 +50,22 @@ function openLink(anchor: HTMLAnchorElement, onNavigate: (target: string) => voi
   }
 }
 
-function RichHtmlEditor(props: NoteEditorProps) {
+function RichHtmlEditor(props: ModeProps) {
   const container = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const emitted = useRef<string | null>(null);
-  // The file as loaded and its body as the schema normalizes it. Matching it again restores the exact original bytes.
-  const pristine = useRef({ value: props.value, body: '' });
+  // The file as loaded, its body as the schema normalizes it and the bytes around the body.
+  // Matching the body again restores the exact original bytes.
+  const pristine = useRef<{ value: string; body: string; parts: HtmlDocumentParts }>({ value: props.value, body: '', parts: { before: '', body: '', after: '' } });
+  const activation = useActivation(props.active);
   const [, setRevision] = useState(0);
 
   useLayoutEffect(() => {
     if (!container.current) return;
     emitted.current = props.value;
-    pristine.current = { value: props.value, body: '' };
+    pristine.current = { value: props.value, body: '', parts: splitHtmlDocument(props.value) };
     // Remote images and unsafe sources are only shown when allowed; the saved HTML keeps them unchanged.
     const SafeImage = Image.extend({
       addNodeView() {
@@ -72,9 +90,10 @@ function RichHtmlEditor(props: NoteEditorProps) {
         WikiLink.configure({
           resolve: target => resolveWikiLink(target, latest.current.notePath, latest.current.notePaths),
           notePaths: () => latest.current.notePaths,
+          linkTarget: path => wikiTargetFor(path, latest.current.notePath, latest.current.notePaths),
         }),
       ],
-      content: splitHtmlDocument(props.value).body,
+      content: pristine.current.parts.body,
       editorProps: {
         attributes: { class: 'html-content', 'aria-label': 'Contenido de la nota', spellcheck: 'true' },
         handleClick(view, _position, event) {
@@ -86,10 +105,12 @@ function RichHtmlEditor(props: NoteEditorProps) {
         },
       },
       onUpdate: ({ editor: current, transaction }) => {
+        // While hidden the body may be stale: source mode owns the file until this mode is shown again.
+        if (!latest.current.active) return;
         const body = formatHtmlBlocks(current.getHTML());
         // Schema fixes appended to a selection-only transaction (e.g. a trailing paragraph) are not edits.
         if (!transaction.docChanged && emitted.current === pristine.current.value) { pristine.current.body = body; return; }
-        const next = body === pristine.current.body ? pristine.current.value : joinHtmlDocument(splitHtmlDocument(latest.current.value), body);
+        const next = body === pristine.current.body ? pristine.current.value : joinHtmlDocument(pristine.current.parts, body);
         if (next === emitted.current) return;
         emitted.current = next;
         latest.current.onChange(next);
@@ -98,7 +119,7 @@ function RichHtmlEditor(props: NoteEditorProps) {
     });
     editorRef.current = editor;
     pristine.current.body = formatHtmlBlocks(editor.getHTML());
-    editor.commands.focus('start');
+    if (latest.current.active) editor.commands.focus('start');
     return () => {
       latest.current = { ...latest.current, onChange: () => {}, onNavigate: () => {} };
       editor.destroy(); editorRef.current = null;
@@ -107,12 +128,16 @@ function RichHtmlEditor(props: NoteEditorProps) {
 
   useEffect(() => {
     const editor = editorRef.current;
-    if (!editor || props.value === emitted.current) return;
-    // External change (reload, conflict resolution): replace without saving or adding history.
+    const activated = activation();
+    if (!editor || !props.active) return;
+    if (activated) editor.commands.focus();
+    if (props.value === emitted.current) return;
+    // Source edits and external changes (reload, conflict resolution) are applied without saving them again.
     emitted.current = props.value;
-    editor.chain().setMeta('addToHistory', false).setContent(splitHtmlDocument(props.value).body, { emitUpdate: false }).run();
-    pristine.current = { value: props.value, body: formatHtmlBlocks(editor.getHTML()) };
-  }, [props.value, props.notePath]);
+    const parts = splitHtmlDocument(props.value);
+    editor.chain().setMeta('addToHistory', activated).setContent(parts.body, { emitUpdate: false }).run();
+    pristine.current = { value: props.value, body: formatHtmlBlocks(editor.getHTML()), parts };
+  }, [props.value, props.notePath, props.active]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -138,7 +163,7 @@ function RichHtmlEditor(props: NoteEditorProps) {
       onMouseDown={event => event.preventDefault()} onClick={() => { if (editor) run(editor.chain().focus()).run(); }}>{icon}</button>;
   };
   const inTable = !!editor?.isActive('table');
-  return <div className="html-editor">
+  return <div className="html-editor" hidden={!props.active}>
     <div className="html-toolbar" role="toolbar" aria-label="Formato">
       {tool('Negrita', <Bold size={15} />, chain => chain.toggleBold(), 'bold')}
       {tool('Cursiva', <Italic size={15} />, chain => chain.toggleItalic(), 'italic')}
@@ -171,12 +196,13 @@ function RichHtmlEditor(props: NoteEditorProps) {
   </div>;
 }
 
-function HtmlSourceEditor(props: NoteEditorProps) {
+function HtmlSourceEditor(props: ModeProps) {
   const container = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const latest = useRef(props);
   latest.current = props;
   const theme = useRef(new Compartment());
+  const activation = useActivation(props.active);
 
   useLayoutEffect(() => {
     if (!container.current) return;
@@ -193,20 +219,28 @@ function HtmlSourceEditor(props: NoteEditorProps) {
       ] }),
     });
     view.current = editor;
-    editor.focus();
+    if (latest.current.active) editor.focus();
     return () => { latest.current = { ...latest.current, onChange: () => {} }; editor.destroy(); view.current = null; };
   }, [props.notePath]);
 
   useEffect(() => {
     const editor = view.current;
-    if (editor && editor.state.doc.toString() !== props.value) {
-      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: props.value }, annotations: Transaction.addToHistory.of(false) });
-    }
-  }, [props.value, props.notePath]);
+    const activated = activation();
+    if (!editor || !props.active) return;
+    if (activated) { editor.requestMeasure(); editor.focus(); }
+    const current = editor.state.doc.toString();
+    if (current === props.value) return;
+    // Replace only the changed span so the selection and earlier history map cleanly.
+    let from = 0;
+    while (from < current.length && from < props.value.length && current[from] === props.value[from]) from++;
+    let end = 0;
+    while (end < current.length - from && end < props.value.length - from && current[current.length - 1 - end] === props.value[props.value.length - 1 - end]) end++;
+    editor.dispatch({ changes: { from, to: current.length - end, insert: props.value.slice(from, props.value.length - end) }, annotations: Transaction.addToHistory.of(activated) });
+  }, [props.value, props.notePath, props.active]);
 
   useEffect(() => {
     view.current?.dispatch({ effects: theme.current.reconfigure(EditorView.theme({}, { dark: props.theme === 'dark' })) });
   }, [props.theme]);
 
-  return <div className="markdown-editor is-source html-source" ref={container} />;
+  return <div className="markdown-editor is-source html-source" hidden={!props.active} ref={container} />;
 }

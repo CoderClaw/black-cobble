@@ -46,7 +46,8 @@ export function parseEnvelope(bytes: Uint8Array): PrivateEnvelope {
   validateSealed(value); return value as PrivateEnvelope;
 }
 export function encryptEnvelope(key: Buffer, vaultId: string, noteId: string, content: string, purpose: 'note' | 'draft' = 'note'): Buffer {
-  if (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_PRIVATE_BYTES) invalid();
+  if (typeof content !== 'string') invalid();
+  if (Buffer.byteLength(content, 'utf8') > MAX_PRIVATE_BYTES) throw new Error('Una nota cifrada admite hasta 16 MiB de texto.');
   const bytes = Buffer.from(content, 'utf8'); if (bytes.toString('utf8') !== content) invalid();
   try { return Buffer.from(`${PRIVATE_HEADER}\n${JSON.stringify({ version: 1, purpose, vaultId, noteId, ...seal(key, bytes, aad(purpose, vaultId, noteId)) })}\n`); }
   finally { bytes.fill(0); }

@@ -9,6 +9,8 @@ export interface WikiLinkOptions {
   /** Read lazily so the editor never needs reconfiguring when notes change. */
   resolve: (target: string) => string | null;
   notePaths: () => string[];
+  /** Target written for a chosen note, so it resolves to that note from the current one. */
+  linkTarget: (path: string) => string;
 }
 
 export const wikiLinkRefresh = new PluginKey('wikiLinkRefresh');
@@ -68,7 +70,7 @@ export const WikiLink = Mark.create<WikiLinkOptions>({
   priority: 1100,
   inclusive: false,
   excludes: 'link code',
-  addOptions() { return { resolve: () => null, notePaths: () => [] }; },
+  addOptions() { return { resolve: () => null, notePaths: () => [], linkTarget: linkTargetFor }; },
   addAttributes() {
     return { target: { default: '', parseHTML: element => element.getAttribute('data-wikilink') ?? '', renderHTML: attributes => ({ 'data-wikilink': attributes.target }) } };
   },
@@ -90,7 +92,7 @@ export const WikiLink = Mark.create<WikiLinkOptions>({
     })];
   },
   addProseMirrorPlugins() {
-    const { resolve, notePaths } = this.options;
+    const { resolve, notePaths, linkTarget } = this.options;
     const type = this.type;
     const editor = this.editor;
     return [
@@ -127,7 +129,7 @@ export const WikiLink = Mark.create<WikiLinkOptions>({
           return [...notePaths()].sort().filter(path => linkTargetFor(path).toLocaleLowerCase().includes(wanted)).slice(0, 50);
         },
         command: ({ editor: target, range, props: path }) => {
-          const link = linkTargetFor(path);
+          const link = linkTarget(path);
           target.chain().focus().insertContentAt(range, [
             { type: 'text', text: labelFor(link), marks: [{ type: 'wikilink', attrs: { target: link } }] },
             { type: 'text', text: ' ' },
