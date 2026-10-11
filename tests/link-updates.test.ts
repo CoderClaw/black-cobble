@@ -37,6 +37,31 @@ describe('rewriteWikiLinks', () => {
     expect(resolveWikiLink(rewritten, 'Source.md', paths.map(note => moves.get(note) ?? note))).toBe('B/Target.md');
   });
 
+  it('only rewrites links that pointed at the moved case variant', () => {
+    const paths = ['Inicio.md', 'Nota.md', 'nota.md'];
+    const content = '[[Nota]] [[nota]] [[Nota.md]] [[nota.md]]';
+    const movedLower = rewriteWikiLinks(content, 'Inicio.md', 'Inicio.md', paths, new Map([['nota.md', 'Otra.md']]));
+    expect(movedLower).toBe('[[Nota]] [[/Otra]] [[Nota.md]] [[/Otra.md]]');
+    const movedUpper = rewriteWikiLinks(content, 'Inicio.md', 'Inicio.md', paths, new Map([['Nota.md', 'Otra.md']]));
+    expect(movedUpper).toBe('[[/Otra]] [[nota]] [[/Otra.md]] [[nota.md]]');
+    const after = paths.map(note => (note === 'nota.md' ? 'Otra.md' : note));
+    expect(resolveWikiLink('Nota', 'Inicio.md', after)).toBe('Nota.md');
+    expect(resolveWikiLink('/Otra', 'Inicio.md', after)).toBe('Otra.md');
+  });
+
+  it('keeps case-variant links pointing at their own note when notes or sources move', () => {
+    const paths = ['Inicio.md', 'Nota.md', 'nota.md'];
+    const moves = new Map([['Nota.md', 'Archivo/Nota.md']]);
+    expect(rewriteWikiLinks('[[Nota]] [[nota]]', 'Inicio.md', 'Inicio.md', paths, moves)).toBe('[[Archivo/Nota]] [[nota]]');
+    const sibling = ['Dir/Fuente.md', 'Dir/Nota.md', 'Dir/nota.md'];
+    expect(rewriteWikiLinks('[[Nota]] [[nota]]', 'Dir/Fuente.md', 'Nuevo/Fuente.md', sibling, new Map([['Dir/Fuente.md', 'Nuevo/Fuente.md']])))
+      .toBe('[[Nota]] [[nota]]');
+    // A new sibling variant shadows only the bare link with that exact case; each link is pinned to its own note.
+    const shadowed = ['Dir/Fuente.md', 'Dir/Nota.md', 'Dir/nota.md', 'Nuevo/nota.md'];
+    expect(rewriteWikiLinks('[[Nota]] [[nota]]', 'Dir/Fuente.md', 'Nuevo/Fuente.md', shadowed, new Map([['Dir/Fuente.md', 'Nuevo/Fuente.md']])))
+      .toBe('[[Dir/Nota]] [[Dir/nota]]');
+  });
+
   it('ignores fenced, indented, inline, nested code and escaped links', () => {
     const content = [
       '[[Old]]',

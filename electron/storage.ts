@@ -18,6 +18,8 @@ type Draft = { id: string; path: string; noteId: string; expectedVersion: string
 
 function fail(message: string): never { throw new Error(message); }
 function isMissing(error: unknown): boolean { return (error as NodeJS.ErrnoException).code === 'ENOENT'; }
+/** A directory entry the app can address: Linux allows names that relative() rejects, which must stay invisible instead of breaking traversals. */
+function validName(name: string): boolean { return !!name && name !== '.' && name !== '..' && !/[<>:"|?*\\\x00-\x1f]/.test(name); }
 function versionOf(bytes: Uint8Array): string { return createHash('sha256').update(bytes).digest('hex'); }
 const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
@@ -141,7 +143,7 @@ export class VaultService {
     if (typeof input !== 'string' || input.includes('\0') || input.includes('\\') || path.isAbsolute(input) || /^[A-Za-z]:/.test(input)) fail('Ruta no válida.');
     if (input === '' && allowRoot) return '';
     const parts = input.split('/');
-    if (!parts.length || parts.some(part => !part || part === '.' || part === '..' || /[<>:"|?*\x00-\x1f]/.test(part))) fail('Ruta no válida.');
+    if (!parts.length || parts.some(part => !validName(part))) fail('Ruta no válida.');
     return parts.join('/');
   }
 
@@ -187,14 +189,13 @@ export class VaultService {
     return relative;
   }
 
-  private async unused(absolute: string, note = false): Promise<void> {
-    const exists = async (candidate: string) => {
-      try { await fs.lstat(candidate); return true; }
-      catch (error) { if (isMissing(error)) return false; throw error; }
-    };
-    if (await exists(absolute)) fail('Ya existe una nota o carpeta con ese nombre.');
+  /** Names collide case-insensitively (Windows, macOS, and wikilinks on any OS); `except` is the entry being renamed. */
+  private async unused(absolute: string, note = false, except?: string): Promise<void> {
+    const folder = path.dirname(absolute);
+    const taken = new Set((await fs.readdir(folder)).filter(entry => !except || path.join(folder, entry) !== except).map(entry => entry.toLowerCase()));
+    if (taken.has(path.basename(absolute).toLowerCase())) fail('Ya existe una nota o carpeta con ese nombre.');
     // Nota.md and Nota.html side by side would make [[Nota]] ambiguous.
-    if (note) for (const other of counterpartPaths(absolute)) if (await exists(other)) fail('Ya existe una nota con ese nombre en otro formato.');
+    if (note) for (const other of counterpartPaths(absolute)) if (taken.has(path.basename(other).toLowerCase())) fail('Ya existe una nota con ese nombre en otro formato.');
   }
 
   private async raw(input: string): Promise<{ path: string; bytes: Buffer; version: string }> {
@@ -346,7 +347,7 @@ export class VaultService {
       // Avoid nesting a serialized list operation inside the queue.
       const scan = async (relative = ''): Promise<boolean> => {
         for (const item of await fs.readdir(await this.folder(relative), { withFileTypes: true })) {
-          if (item.isSymbolicLink()) continue;
+          if (item.isSymbolicLink() || !validName(item.name)) continue;
           const file = relative ? `${relative}/${item.name}` : item.name;
           if (item.isDirectory() && !item.name.startsWith('.') && await scan(file)) return true;
           if (item.isFile() && isNotePath(file) && await this.encryptedMarker(file)) return true;
@@ -518,7 +519,7 @@ export class VaultService {
         const absolute = await this.folder(relative);
         const entries: VaultEntry[] = [];
         for (const item of await fs.readdir(absolute, { withFileTypes: true })) {
-          if (item.name.startsWith('.') || item.isSymbolicLink()) continue;
+          if (item.name.startsWith('.') || item.isSymbolicLink() || !validName(item.name)) continue;
           const itemPath = relative ? `${relative}/${item.name}` : item.name;
           try {
             const itemAbsolute = await this.resolve(itemPath);
@@ -599,15 +600,16 @@ export class VaultService {
     if (target === source) return relative;
     const withinSource = path.relative(source, target);
     if (stat.isDirectory() && (withinSource === '' || (!withinSource.startsWith(`..${path.sep}`) && withinSource !== '..' && !path.isAbsolute(withinSource)))) fail('No puedes mover una carpeta dentro de sí misma.');
-    const caseOnlyRename = process.platform === 'win32' && source.toLowerCase() === target.toLowerCase();
-    if (!caseOnlyRename) await this.unused(target, stat.isFile());
+    // Filesystem-agnostic: on case-insensitive volumes the source itself matches the target.
+    const caseOnlyRename = path.dirname(source) === path.dirname(target) && path.basename(source).toLowerCase() === path.basename(target).toLowerCase();
+    await this.unused(target, stat.isFile(), caseOnlyRename ? source : undefined);
     const result = destination ? `${destination}/${filename}` : filename;
     if (this.metadata && !this.privateKey) fail('Desbloquea las notas privadas antes de mover o renombrar para conservar sus enlaces.');
     const notePaths = async (): Promise<string[]> => {
       const notes: string[] = [];
       const visit = async (parent: string): Promise<void> => {
         for (const item of await fs.readdir(await this.folder(parent), { withFileTypes: true })) {
-          if (item.name.startsWith('.') || item.isSymbolicLink()) continue;
+          if (item.name.startsWith('.') || item.isSymbolicLink() || !validName(item.name)) continue;
           const child = parent ? `${parent}/${item.name}` : item.name;
           const absolute = await this.resolve(child);
           const childStat = await fs.lstat(absolute);
@@ -644,7 +646,7 @@ export class VaultService {
       // Revalidate after watcher teardown, which yields to external processes.
       await this.resolve(relative);
       await this.folder(destination);
-      if (!caseOnlyRename) await this.unused(target, stat.isFile());
+      await this.unused(target, stat.isFile(), caseOnlyRename ? source : undefined);
       if (JSON.stringify(await notePaths()) !== JSON.stringify(pathsBefore)) fail('CONFLICT: Las notas han cambiado fuera de la aplicación.');
       for (const note of snapshots) {
         if ((await this.raw(note.path)).version !== note.version) fail('CONFLICT: Una nota ha cambiado fuera de la aplicación.');
@@ -668,7 +670,7 @@ export class VaultService {
         if (!recoveryFailures.length) {
           try {
             await this.resolve(result);
-            if (!caseOnlyRename) await this.unused(source);
+            await this.unused(source, false, caseOnlyRename ? target : undefined);
             await fs.rename(target, source);
           } catch { recoveryFailures.push(result); }
         }

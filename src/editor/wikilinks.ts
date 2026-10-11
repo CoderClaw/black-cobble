@@ -75,10 +75,20 @@ export function resolveWikiLink(target: string, currentPath: string, notePaths: 
   // Bare names try Markdown first. A vault never holds both Nota.md and Nota.html in one folder.
   const destinations = isNotePath(normalized) ? [normalized] : NOTE_FORMATS.map(format => `${normalized}${NOTE_EXTENSIONS[format]}`);
   const notes = [...notePaths].sort((a, b) => a.localeCompare(b, 'en') || (a < b ? -1 : 1));
+  // Per destination (format order): a candidate matching with exact case wins, else the first case-insensitive one (Linux vaults may hold Nota.md and nota.md).
+  const pick = (wanted: string, key: (note: string) => string | undefined) => {
+    const folded = wanted.toLocaleLowerCase();
+    let fallback: string | null = null;
+    for (const note of notes) {
+      const name = key(note);
+      if (name === wanted) return note;
+      if (!fallback && name?.toLocaleLowerCase() === folded) fallback = note;
+    }
+    return fallback;
+  };
   const find = (prefix: string) => {
     for (const destination of destinations) {
-      const wanted = `${prefix}${destination}`.toLocaleLowerCase();
-      const note = notes.find(candidate => candidate.replace(/\\/g, '/').toLocaleLowerCase() === wanted);
+      const note = pick(`${prefix}${destination}`, candidate => candidate.replace(/\\/g, '/'));
       if (note) return note;
     }
     return null;
@@ -94,7 +104,7 @@ export function resolveWikiLink(target: string, currentPath: string, notePaths: 
   if (exact) return exact;
   if (raw.includes('/')) return find(sibling);
   for (const destination of destinations) {
-    const note = notes.find(candidate => candidate.replace(/\\/g, '/').split('/').pop()?.toLocaleLowerCase() === destination.toLocaleLowerCase());
+    const note = pick(destination, candidate => candidate.replace(/\\/g, '/').split('/').pop());
     if (note) return note;
   }
   return null;

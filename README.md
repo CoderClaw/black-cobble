@@ -20,13 +20,19 @@ npm run build
 npm start
 ```
 
-Para generar el ejecutable portátil de Windows:
+Para empaquetar la aplicación hay un comando por sistema operativo:
 
 ```sh
-npm run package
+npm run package         # sistema actual (Windows o Linux)
+npm run package:win     # ejecutable portátil de Windows
+npm run package:linux   # AppImage de Linux
 ```
 
-El resultado se guarda en `release/Black Cobble 0.1.1.exe`. No requiere instalar Node.js en el equipo donde se use. El ejecutable no está firmado.
+- Windows: `release/Black Cobble 0.1.1.exe`. No requiere instalar Node.js en el equipo donde se use. El ejecutable no está firmado. También se puede generar desde Linux, sin Wine.
+- Linux: `release/black-cobble-0.1.1-x86_64.AppImage`, un único archivo que no necesita instalación ni permisos de administrador. Hay que darle permiso de ejecución (`chmod +x`). Para arrancar necesita FUSE 2; si no lo hace, en Fedora instala `sudo dnf install fuse-libs`. Sin FUSE se puede ejecutar con `APPIMAGE_EXTRACT_AND_RUN=1` o extraer con `--appimage-extract`.
+- Cada empaquetado deja además la carpeta sin empaquetar (`release/win-unpacked/` o `release/linux-unpacked/`), que usa la prueba de humo.
+
+En Linux no hacen falta más requisitos de desarrollo que Node.js 22.12 o posterior.
 
 ## Uso
 
@@ -72,7 +78,7 @@ Una nota puede ocupar hasta 32 MiB en disco; una nota cifrada, hasta 16 MiB de t
 
 ### Formato privado anterior
 
-Las bóvedas de la versión experimental con cifrado por nota no se migran automáticamente. La aplicación conserva sus archivos y bloquea la configuración privada nueva si detecta el formato anterior. La compilación anterior se conserva en release/Black Cobble legacy private notes.exe para abrir esas notas. Mantén una copia completa antes de convertir o trasladar datos; no borres .black-cobble/private.json mientras existan notas o borradores que dependan de ella.
+Las bóvedas de la versión experimental con cifrado por nota no se migran automáticamente. La aplicación conserva sus archivos y bloquea la configuración privada nueva si detecta el formato anterior. La compilación anterior (solo para Windows) se conserva en release/Black Cobble legacy private notes.exe para abrir esas notas. Mantén una copia completa antes de convertir o trasladar datos; no borres .black-cobble/private.json mientras existan notas o borradores que dependan de ella.
 
 ## Alcance del editor
 
@@ -80,7 +86,7 @@ Incluye encabezados, negrita, cursiva, tachado, citas, listas, tareas con casill
 
 Las tablas tienen formato básico y conservan sus separadores. La carga de imágenes locales, los enlaces Markdown de referencia, embeds de notas, fórmulas, Mermaid y extensiones de Obsidian quedan pendientes. Los enlaces por nombre buscan primero en la carpeta actual; conviene usar rutas completas cuando hay nombres repetidos.
 
-La aplicación muestra una bóveda y una nota cada vez. Omite carpetas ocultas y enlaces simbólicos. No modifica la configuración `.obsidian`. La configuración propia se guarda en los datos de la aplicación; el tema y el estado del árbol, en el almacenamiento local de Electron.
+La aplicación muestra una bóveda y una nota cada vez. Omite carpetas ocultas, enlaces simbólicos y archivos o carpetas cuyo nombre no admite Windows (con `\ : * ? " < > |`), que Linux sí permite. Los nombres no distinguen mayúsculas en ningún sistema: no se puede crear, mover ni renombrar a `nota.md` si ya existe `Nota.md`, para que la bóveda siga siendo válida en Windows. Si una bóveda creada fuera de la aplicación en Linux tiene ambas, un wikilink prefiere la nota con las mismas mayúsculas. No modifica la configuración `.obsidian`. La configuración propia se guarda en los datos de la aplicación; el tema y el estado del árbol, en el almacenamiento local de Electron.
 
 ## Validación
 
@@ -90,7 +96,7 @@ npm run build
 npm run test:e2e
 ```
 
-Tras empaquetar, `node scripts/smoke-package.mjs` comprueba la apertura, la edición, el guardado, el cifrado en disco y el bloqueo del ejecutable generado con una bóveda temporal.
+Tras empaquetar, `npm run smoke:package` comprueba la apertura, la edición, el guardado, el cifrado en disco y el bloqueo del ejecutable sin empaquetar del sistema actual (`release/win-unpacked/Black Cobble.exe` o `release/linux-unpacked/black-cobble`) con una bóveda temporal. Otro ejecutable se indica con `BOVEDA_PACKAGED_EXE` o como argumento.
 
 Las pruebas unitarias comprueban almacenamiento, rutas, conflictos, formato y resolución de wikilinks. Las pruebas de escritorio lanzan Electron con una bóveda temporal y verifican edición, tareas, navegación, CRUD, recuperación de conflictos, cambios externos y guardado al cerrar y reabrir. Las capturas se guardan en `test-results`.
 
