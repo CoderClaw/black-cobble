@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react';
 import { FilePlus2, FolderPlus, FolderOpen, Moon, Sun, Search, Pencil, ArrowRightToLine, Trash2, X, ChevronsLeft, Menu, MoreHorizontal, LockKeyhole, KeyRound } from 'lucide-react';
 import type { NoteDocument, PrivateDraftInfo, PrivateSessionStatus, VaultEntry, VaultInfo } from '../shared/types';
 import MarkdownEditor from './editor/MarkdownEditor';
@@ -7,6 +7,7 @@ import { htmlText } from './editor/htmlDocument';
 import { NOTE_EXTENSIONS, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
 import { parseWikiLink, resolveWikiLink } from './editor/wikilinks';
 import FileTree from './components/FileTree';
+import ContextMenu from './components/ContextMenu';
 import EntryDialog, { type DialogSpec } from './components/EntryDialog';
 import PrivatePasswordDialog, { type PasswordMode } from './components/PrivatePasswordDialog';
 import { baseName, errorMessage, flattenEntries, isWithin, parentPath, replacePrefix } from './lib/paths';
@@ -41,6 +42,9 @@ export default function App() {
   const [dialogError, setDialogError] = useState('');
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [entryMenu, setEntryMenu] = useState(false);
+  // `parent` is where "Nueva nota/carpeta" create (none for notes); `entry` adds the selected entry's actions.
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; parent?: string; entry: boolean } | null>(null);
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
   const [draggingPath, setDraggingPath] = useState<string | null>(null);
   const [dropPath, setDropPath] = useState<string | null>(null);
   const dragSession = useRef<EntryDragSession | null>(null);
@@ -83,7 +87,7 @@ export default function App() {
     hoverFolder.current = null; dragSession.current = null;
     updateNote(null); setEntries([]); setSelected(''); setExpanded(new Set()); setQuery('');
     setFocusHeading(undefined); setFocusRequest(0); setSourceMode(false);
-    setDialog(null); setDialogError(''); setPasswordMode(null); setPasswordError(''); setEntryMenu(false);
+    setDialog(null); setDialogError(''); setPasswordMode(null); setPasswordError(''); setEntryMenu(false); setContextMenu(null);
     setPrivateDrafts([]); setDiscardDraft(null); setDraggingPath(null); setDropPath(null);
     setSaving(false); setSaveError(false); setError('');
   }, [updateNote]);
@@ -336,7 +340,7 @@ export default function App() {
   function beginEntryDrag(event: DragEvent<HTMLElement>, path: string) {
     if (busyRef.current || noteRef.current?.conflict || !allEntries.some(entry => entry.path === path)) { event.preventDefault(); return; }
     const session = { path, token: crypto.randomUUID() };
-    dragSession.current = session; setDraggingPath(path); setDropPath(null); setEntryMenu(false);
+    dragSession.current = session; setDraggingPath(path); setDropPath(null); setEntryMenu(false); setContextMenu(null);
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData(ENTRY_DRAG_TYPE, JSON.stringify(session));
   }
@@ -419,9 +423,16 @@ export default function App() {
   function showDialog(spec: DialogSpec) {
     if (busyRef.current || (vaultRef.current?.kind === 'private' && !statusRef.current?.unlocked)) return;
     if (noteRef.current?.conflict) { setError('Guarda una copia o descarta los cambios antes de continuar.'); return; }
-    setEntryMenu(false); setDialogError(''); setDialog(spec);
+    setEntryMenu(false); setContextMenu(null); setDialogError(''); setDialog(spec);
   }
-  function create(kind: 'note' | 'folder') { if (!vaultRef.current || (vaultRef.current.kind === 'private' && !statusRef.current?.unlocked)) return; showDialog({ kind, title: kind === 'note' ? 'Nueva nota' : 'Nueva carpeta', path: selectedFolder }); }
+  function create(kind: 'note' | 'folder', parent = selectedFolder) { if (!vaultRef.current || (vaultRef.current.kind === 'private' && !statusRef.current?.unlocked)) return; showDialog({ kind, title: kind === 'note' ? 'Nueva nota' : 'Nueva carpeta', path: parent }); }
+  // No entry: the vault root. A folder creates inside itself; a note only offers its actions.
+  function openContextMenu(event: MouseEvent, entry?: VaultEntry) {
+    event.preventDefault(); event.stopPropagation(); setEntryMenu(false);
+    if (!canEdit || dialog || dragSession.current) { setContextMenu(null); return; }
+    if (entry) setSelected(entry.path);
+    setContextMenu({ x: event.clientX, y: event.clientY, parent: entry ? entry.type === 'folder' ? entry.path : undefined : '', entry: !!entry });
+  }
 
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
@@ -669,6 +680,7 @@ export default function App() {
   const words = visibleText ? visibleText.split(/\s+/u).length : 0;
   const NoteEditor = htmlNote ? HtmlEditor : MarkdownEditor;
   const dirty = !!note && note.content !== note.savedContent;
+  useEffect(() => { if (!canEdit || dialog || draggingPath || (contextMenu?.entry && !selectedEntry)) setContextMenu(null); }, [canEdit, dialog, draggingPath, contextMenu, selectedEntry]);
   const mutationButtons = selectedEntry && <>
     <button role="menuitem" onClick={() => showDialog({ kind: 'rename', title: 'Renombrar', path: selectedEntry.path, initialValue: selectedEntry.type === 'file' ? stripNoteExtension(selectedEntry.name) : selectedEntry.name })}><Pencil size={15} />Renombrar</button>
     <button role="menuitem" onClick={() => showDialog({ kind: 'move', title: 'Mover', path: selectedEntry.path, initialValue: parentPath(selectedEntry.path), folders: folderPaths.filter(folder => selectedEntry.type !== 'folder' || !isWithin(folder, selectedEntry.path)) })}><ArrowRightToLine size={15} />Mover</button>
@@ -677,11 +689,11 @@ export default function App() {
 
   return <div className={`app ${sidebarVisible ? '' : 'sidebar-hidden'}`} data-theme={theme}>
     {vault && sidebarVisible && <aside className="sidebar" aria-label="Bóveda">
-      <header className="vault-header"><button className={`vault-name ${dropPath === '' ? 'drop-target' : ''}`} title={vault.path} data-drop-path="" onDragOver={event => overEntryDrop(event, '')} onDragLeave={event => leaveEntryDrop(event, '')} onDrop={event => void dropEntry(event, '')} onClick={() => { setSelected(''); setEntryMenu(false); }}><FolderOpen size={17} /><span>{vault.name}</span></button><button className="icon-button" title="Ocultar archivos" aria-label="Ocultar archivos" onClick={() => setSidebarVisible(false)}><ChevronsLeft size={17} /></button></header>
+      <header className="vault-header" onContextMenu={event => openContextMenu(event)}><button className={`vault-name ${dropPath === '' ? 'drop-target' : ''}`} title={vault.path} data-drop-path="" onDragOver={event => overEntryDrop(event, '')} onDragLeave={event => leaveEntryDrop(event, '')} onDrop={event => void dropEntry(event, '')} onClick={() => { setSelected(''); setEntryMenu(false); }}><FolderOpen size={17} /><span>{vault.name}</span></button><button className="icon-button" title="Ocultar archivos" aria-label="Ocultar archivos" onClick={() => setSidebarVisible(false)}><ChevronsLeft size={17} /></button></header>
       <div className="vault-switch" role="group" aria-label="Tipo de bóveda"><button aria-pressed={!privateVault} disabled={busy || passwordBusy} onClick={() => void switchVaultMode('normal')}>Normal</button><button aria-pressed={privateVault} disabled={busy || passwordBusy} onClick={() => void switchVaultMode('private')}>Privada</button></div>
       {!privateLocked && <div className="sidebar-tools"><button className="icon-button" aria-label="Nueva nota" title="Nueva nota (Ctrl+N)" disabled={!canEdit} onClick={() => create('note')}><FilePlus2 size={17} /></button><button className="icon-button" aria-label="Nueva carpeta" title="Nueva carpeta" disabled={!canEdit} onClick={() => create('folder')}><FolderPlus size={17} /></button><div className="entry-menu-anchor"><button className="icon-button" aria-label="Acciones del archivo" title="Acciones del archivo" disabled={!selectedEntry || !canEdit} onClick={() => setEntryMenu(!entryMenu)}><MoreHorizontal size={18} /></button>{entryMenu && <><button className="menu-dismiss" aria-label="Cerrar menú" onClick={() => setEntryMenu(false)} /><div role="menu" className="entry-menu">{mutationButtons}</div></>}</div><span className="tool-spacer" /></div>}
       {!privateLocked && <label className="search-field"><Search size={15} /><input aria-label="Buscar archivos" placeholder="Buscar archivos" value={query} onChange={event => setQuery(event.target.value)} />{query && <button className="icon-button" aria-label="Limpiar búsqueda" onClick={() => setQuery('')}><X size={14} /></button>}</label>}
-      <nav className={`tree-scroll ${dropPath === '' ? 'root-drop-target' : ''}`} inert={!canEdit} data-drop-path="" onDragOver={overRootDrop} onDragLeave={event => leaveEntryDrop(event, '')} onDrop={dropInRoot}><FileTree entries={privateLocked ? [] : entries} expanded={expanded} selected={selected} current={note?.path} query={query} canDrag={canEdit && !note?.conflict} draggingPath={draggingPath} dropPath={dropPath} onDragStart={beginEntryDrag} onDragEnd={endEntryDrag} onDragOver={overEntryDrop} onDragLeave={leaveEntryDrop} onDrop={(event, path) => void dropEntry(event, path)} onToggle={path => setExpanded(previous => { const next = new Set(previous); if (next.has(path)) next.delete(path); else next.add(path); return next; })} onSelect={entry => { setEntryMenu(false); if (entry.type === 'file') void openNote(entry.path); else { setSelected(entry.path); setExpanded(previous => new Set(previous).add(entry.path)); } }} onContext={entry => { setSelected(entry.path); setEntryMenu(true); }} />{!privateLocked && entries.length === 0 && <p className="tree-empty">La bóveda está vacía.</p>}{entries.length > 0 && query && !allEntries.some(entry => entry.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="tree-empty">Sin resultados.</p>}{draggingPath && <div className="root-drop-hint">Soltar aquí para mover a la raíz</div>}</nav>
+      <nav className={`tree-scroll ${dropPath === '' ? 'root-drop-target' : ''}`} inert={!canEdit} data-drop-path="" onContextMenu={event => openContextMenu(event)} onDragOver={overRootDrop} onDragLeave={event => leaveEntryDrop(event, '')} onDrop={dropInRoot}><FileTree entries={privateLocked ? [] : entries} expanded={expanded} selected={selected} current={note?.path} query={query} canDrag={canEdit && !note?.conflict} draggingPath={draggingPath} dropPath={dropPath} onDragStart={beginEntryDrag} onDragEnd={endEntryDrag} onDragOver={overEntryDrop} onDragLeave={leaveEntryDrop} onDrop={(event, path) => void dropEntry(event, path)} onToggle={path => setExpanded(previous => { const next = new Set(previous); if (next.has(path)) next.delete(path); else next.add(path); return next; })} onSelect={entry => { setEntryMenu(false); if (entry.type === 'file') void openNote(entry.path); else { setSelected(entry.path); setExpanded(previous => new Set(previous).add(entry.path)); } }} onContext={openContextMenu} />{!privateLocked && entries.length === 0 && <p className="tree-empty">La bóveda está vacía.</p>}{entries.length > 0 && query && !allEntries.some(entry => entry.name.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) && <p className="tree-empty">Sin resultados.</p>}{draggingPath && <div className="root-drop-hint">Soltar aquí para mover a la raíz</div>}</nav>
       {privateVault && privateStatus?.unlocked && <div className="private-controls"><button disabled={passwordBusy} onClick={() => void lockSession()}><LockKeyhole size={15} />Bloquear bóveda</button><button className="icon-button" title="Cambiar contraseña" aria-label="Cambiar contraseña" disabled={busy || passwordBusy} onClick={() => openPassword('change')}><KeyRound size={15} /></button></div>}
       <footer className="sidebar-footer"><button onClick={() => void changeVault()} disabled={busy}><FolderOpen size={15} />Cambiar bóveda</button><button className="icon-button" title={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'} aria-label={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button></footer>
     </aside>}
@@ -695,6 +707,11 @@ export default function App() {
       {loading ? <div className="empty-state"><p>Abriendo bóveda…</p></div> : !vault ? <div className="welcome"><FolderOpen size={33} strokeWidth={1.3} /><h1>Black Cobble</h1><p>Tus notas Markdown y HTML en una carpeta.</p><button className="primary-button" disabled={busy} onClick={() => void changeVault()}>{busy ? 'Abriendo…' : 'Abrir o crear una bóveda'}</button><button className="theme-text" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}</button></div> : privateLocked ? <div className="empty-state locked-note"><LockKeyhole size={25} /><p>{privateStatus?.configured ? 'Bóveda privada bloqueada' : 'Crea tu bóveda privada'}</p><button className="primary-button" disabled={busy || passwordBusy || !!privateStatus?.error} onClick={() => openPassword()}>{privateStatus?.configured ? 'Desbloquear bóveda' : 'Crear contraseña'}</button></div> : note ? <><div className="editor-wrap" inert={busy} aria-busy={busy}><NoteEditor key={`${vault.path}:${note.path}:${note.encrypted ? note.sessionId : 'public'}`} value={note.content} onChange={changeContent} notePath={note.path} notePaths={notePaths} onNavigate={navigateWiki} sourceMode={sourceMode} privateMode={privateVault} theme={theme} focusHeading={focusHeading} navigationId={focusRequest} /></div><footer className="note-status"><span aria-live="polite">{note.conflict ? 'Cambios sin guardar' : saving ? 'Guardando…' : saveError ? 'No se ha guardado' : dirty ? 'Cambios pendientes' : 'Guardado'}</span><span>{words} {words === 1 ? 'palabra' : 'palabras'}</span></footer></> : <div className="empty-state"><p>Abre una nota o crea una nueva.</p><button className="primary-button" disabled={!canEdit} onClick={() => create('note')}><FilePlus2 size={16} />Nueva nota</button></div>}
     </main>
     {dialog && <EntryDialog key={`${dialog.kind}:${dialog.path}`} spec={dialog} busy={busy} error={dialogError} onCancel={() => { setDialog(null); setError(''); }} onSubmit={(value, format) => void submitDialog(value, format)} />}
+    {contextMenu && canEdit && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={contextMenu.entry ? 'Acciones del archivo' : 'Acciones de la bóveda'} onClose={closeContextMenu}>
+      {contextMenu.parent !== undefined && <><button role="menuitem" onClick={() => create('note', contextMenu.parent)}><FilePlus2 size={15} />Nueva nota</button><button role="menuitem" onClick={() => create('folder', contextMenu.parent)}><FolderPlus size={15} />Nueva carpeta</button></>}
+      {contextMenu.parent !== undefined && contextMenu.entry && <div role="separator" className="menu-separator" />}
+      {contextMenu.entry && mutationButtons}
+    </ContextMenu>}
     {passwordMode && <PrivatePasswordDialog key={passwordMode} mode={passwordMode} busy={passwordBusy} error={passwordError} onCancel={() => { setPasswordMode(null); setPasswordError(''); }} onSubmit={submitPassword} />}
   </div>;
 }

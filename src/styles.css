@@ -90,6 +90,8 @@ input, select { background: var(--bg); color: var(--text); border: 1px solid var
 .entry-menu-anchor { position: relative; }
 .entry-menu { position: absolute; top: 34px; left: 0; min-width: 165px; z-index: 11; background: var(--raised); border: 1px solid var(--line); border-radius: 7px; padding: 5px; box-shadow: 0 8px 25px #0004; }
 .entry-menu button { width: 100%; justify-content: flex-start; font-size: 12px; }
+.context-menu { position: fixed; z-index: 30; }
+.menu-separator { height: 1px; margin: 4px 2px; background: var(--line); }
 .menu-dismiss { position: fixed; inset: 0; z-index: 10; cursor: default; border-radius: 0; }
 .menu-dismiss:hover { background: transparent; }
 .danger-text { color: var(--danger); }
