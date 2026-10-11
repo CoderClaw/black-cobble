@@ -1,8 +1,21 @@
 import { _electron as electron } from '@playwright/test';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+
+const defaults = { win32: 'release/win-unpacked/Black Cobble.exe', linux: 'release/linux-unpacked/black-cobble' };
+const requested = process.env.BOVEDA_PACKAGED_EXE || process.argv[2] || defaults[process.platform];
+if (!requested) {
+  console.error(`Plataforma no admitida: ${process.platform}. Indica el ejecutable con BOVEDA_PACKAGED_EXE o como argumento.`);
+  process.exit(1);
+}
+const executablePath = path.resolve(requested);
+if (!existsSync(executablePath)) {
+  console.error(`No se encuentra el ejecutable empaquetado: ${executablePath}\nGenéralo antes con "npm run package".`);
+  process.exit(1);
+}
 
 const root = await mkdtemp(path.join(tmpdir(), 'boveda-package-'));
 const vault = path.join(root, 'vault');
@@ -12,7 +25,7 @@ await writeFile(path.join(vault, 'programacion', 'js.md'), '# JavaScript\n');
 await writeFile(path.join(vault, 'Prueba.md'), '# Aplicación empaquetada\n\n[[programacion/js]]\n\n');
 const env = { ...process.env, BOVEDA_TEST_VAULT: vault, BOVEDA_USER_DATA: path.join(root, 'profile') };
 delete env.ELECTRON_RUN_AS_NODE;
-const app = await electron.launch({ executablePath: path.resolve('release/win-unpacked/Black Cobble.exe'), env });
+const app = await electron.launch({ executablePath, env });
 try {
   const page = await app.firstWindow();
   assert.equal(await page.title(), 'Black Cobble');

@@ -1,8 +1,8 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'vite';
-import { build } from 'esbuild';
 import electron from 'electron';
-await build({ entryPoints: ['electron/main.ts', 'electron/preload.ts'], bundle: true, platform: 'node', format: 'cjs', outdir: 'dist-electron', outExtension: { '.js': '.cjs' }, external: ['electron'], sourcemap: true });
+import { buildElectron } from './esbuild-electron.mjs';
+await buildElectron();
 const server = await createServer();
 await server.listen();
 const env = { ...process.env, VITE_DEV_SERVER_URL: 'http://127.0.0.1:5173' };
