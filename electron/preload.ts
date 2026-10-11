@@ -39,6 +39,8 @@ const api: VaultAPI = {
   moveEntry: (path, destinationFolder) => ipcRenderer.invoke('vault:move', path, destinationFolder),
   trashEntry: path => ipcRenderer.invoke('vault:trash', path),
   openExternal: url => ipcRenderer.invoke('vault:external', url),
+  searchNotes: (options, sessionId) => ipcRenderer.invoke('vault:search', options, sessionId),
+  replaceInNotes: (options, replacement, targets, sessionId) => ipcRenderer.invoke('vault:replace', options, replacement, targets, sessionId),
   onVaultChanged: callback => subscribe('vault:changed', callback),
   onBeforeClose: callback => {
     closeCallbacks.add(callback);

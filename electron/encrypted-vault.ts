@@ -5,13 +5,15 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { decryptEnvelope, encryptEnvelope, MAX_PRIVATE_BYTES, parseEnvelope, parseMetadata, unwrapKey, wrapKey, type PrivateMetadata } from './crypto';
 import { rewriteWikiLinks } from '../shared/linkUpdates';
+import { SEARCH_TOTAL_MS, SearchRunner, SearchTimeoutError, skippable } from './search-runner';
+import { replaceFailure, searchFiles, searchPattern, type ReplaceEdit, type ReplaceOutcome, type ReplaceTarget, type SearchOptions, type SearchResult } from '../shared/search';
 import { counterpartPaths, initialNoteContent, isNotePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
 import type { NoteDocument, PrivateDraftInfo, PrivateSessionStatus, VaultEntry, VaultInfo } from '../shared/types';
 
 export const PRIVATE_CHILD = '.black-cobble-private';
 /** The complete JSON tree, note bodies and recovery drafts must fit in 16 MiB. */
 export const MAX_VAULT_BYTES = MAX_PRIVATE_BYTES;
-type Options = { watch?: boolean; onChange?: () => void; onPrivateSessionChanged?: (status: PrivateSessionStatus) => void };
+type Options = { watch?: boolean; onChange?: () => void; onPrivateSessionChanged?: (status: PrivateSessionStatus) => void; search?: SearchRunner };
 type Note = { id: string; path: string; content: string; revision: number };
 type Draft = { id: string; path: string; content: string; expectedVersion: string; revision: number; updatedAt: number };
 type Snapshot = { version: 1; folders: string[]; notes: Note[]; drafts: Draft[] };
@@ -93,7 +95,8 @@ export class EncryptedVault {
   /** Recovery files left sealed at unlock because their versions did not fit in the vault. */
   private deferredRecovery = 0;
   private readonly options: Options;
-  constructor(root: string, options: Options = {}) { this.root = path.resolve(root); this.options = options; }
+  private readonly search: SearchRunner;
+  constructor(root: string, options: Options = {}) { this.root = path.resolve(root); this.options = options; this.search = options.search ?? new SearchRunner(); }
   get info(): VaultInfo { return { name: 'Privada', path: path.join(this.root, PRIVATE_CHILD), kind: 'private', parentPath: this.root }; }
   get file(): string { return path.join(this.root, PRIVATE_CHILD, 'vault.sealed'); }
   private queue<T>(operation: () => Promise<T>): Promise<T> { const result = this.tail.then(operation, operation); this.tail = result.catch(() => undefined); return result; }
@@ -236,10 +239,11 @@ export class EncryptedVault {
         if (next.drafts.length !== this.state.drafts.length) this.stage(next);
       } catch { /* Existing sealed recovery bytes still protect accepted drafts. */ }
     }
-    this.generation++; this.sid = null; this.key?.fill(0); this.key = undefined; this.state = undefined; this.changed();
+    // Terminating the worker also drops any plaintext it holds and stops a runaway pattern.
+    this.generation++; this.sid = null; this.key?.fill(0); this.key = undefined; this.state = undefined; this.search.cancel(locked); this.changed();
     return this.queue(async () => { if (this.pending && !this.error) { try { await this.persist(this.pending); } catch { /* Retain only sealed bytes for close-time retry. */ } } return this.getPrivateSession(); });
   }
-  async dispose(): Promise<void> { await this.lockPrivateSession(); this.disposed = true; await this.tail; await this.watcher?.close(); }
+  async dispose(): Promise<void> { await this.lockPrivateSession(); this.disposed = true; await this.tail; await this.watcher?.close(); if (!this.options.search) this.search.dispose(); }
   private async view(id: string | null): Promise<Snapshot> { this.session(id); await this.checkDisk(); this.session(id); return this.state!; }
   private note(state: Snapshot, input: string): Note { relative(input); const note = state.notes.find(item => item.path === input); if (!note) fail('CONFLICT: La nota no existe o se ha movido.'); return note; }
   private document(note: Note, id = this.sid!): NoteDocument { return { path: note.path, content: note.content, version: noteVersion(note), encrypted: true, locked: false, sessionId: id }; }
@@ -268,6 +272,50 @@ export class EncryptedVault {
   readNote(input: string): Promise<NoteDocument> { const id = this.sid; return this.queue(async () => this.document(this.note(await this.view(id), input), id!)); }
   writeNote(input: string, content: string, expectedVersion: string, id?: string): Promise<NoteDocument> {
     return this.mutate(id ?? null, state => { const note = this.note(state, input); if (noteVersion(note) !== expectedVersion) fail('CONFLICT: La nota ha cambiado.'); this.text(content); note.content = content; note.revision++; state.drafts = state.drafts.filter(draft => draft.path !== input || draft.content !== content); return this.document(note, id!); });
+  }
+  /** A copy of the unlocked notes, taken inside the queue; contents are shared immutable strings. */
+  private snapshotNotes(id: string | null): Promise<Snapshot> { return this.queue(async () => { const state = await this.view(id); return { ...state, notes: state.notes.map(note => ({ ...note })) }; }); }
+  /**
+   * Notes of the unlocked snapshot only; recovery drafts are not searched. Matching runs outside the queue, so saves
+   * and drafts never wait; plaintext reaches the worker in memory only, and only while the session holds.
+   */
+  async searchNotes(options: SearchOptions, id?: string): Promise<SearchResult> {
+    const sid = id ?? null; const notes = new Map((await this.snapshotNotes(sid)).notes.map(note => [note.path, note])); const deadline = Date.now() + SEARCH_TOTAL_MS;
+    try {
+      const load = (input: string) => { this.session(sid); const note = notes.get(input)!; return { version: noteVersion(note), content: note.content }; };
+      const result = await searchFiles([...notes.keys()], options, load, (content, format, value, limit) => { this.session(sid); return this.search.find(content, format, value, limit).catch(error => skippable(error, value)); }, deadline);
+      this.session(sid); return result;
+    } finally { this.search.release(); }
+  }
+  /** New text is computed outside the queue; every rewritten note is then rechecked and sealed in one snapshot. */
+  async replaceInNotes(options: SearchOptions, replacement: string, targets: ReplaceTarget[], id?: string): Promise<ReplaceOutcome[]> {
+    if (typeof replacement !== 'string' || !Array.isArray(targets)) fail('Argumento no válido.');
+    searchPattern(options); const sid = id ?? null; const current = await this.snapshotNotes(sid);
+    const results: Array<{ content: string; count: number; edits: ReplaceEdit[] } | ReplaceOutcome> = []; let timedOut: SearchTimeoutError | undefined;
+    try {
+      for (const target of targets) {
+        if (timedOut) { results.push({ path: target.path, status: 'error', count: 0, message: timedOut.message }); continue; }
+        try {
+          this.session(sid); const note = this.note(current, target.path); if (noteVersion(note) !== target.version) fail('CONFLICT: La nota ha cambiado.');
+          results.push(await this.search.replace(note.content, noteFormat(note.path) ?? 'md', options, replacement, target.matches));
+        } catch (error) { this.session(sid); if (error instanceof SearchTimeoutError && options.regex) timedOut = error; results.push(replaceFailure(target.path, error)); }
+      }
+    } finally { this.search.release(); }
+    return this.queue(async () => {
+      // Apply onto the latest state without awaiting, rechecking each version.
+      const state = structuredClone(await this.view(sid)); let changed = false;
+      const outcomes = targets.map((target, index): ReplaceOutcome => {
+        const result = results[index];
+        if ('status' in result) return result;
+        try {
+          const note = this.note(state, target.path); if (noteVersion(note) !== target.version) fail('CONFLICT: La nota ha cambiado.');
+          if (result.count) { this.text(result.content); note.content = result.content; note.revision++; state.drafts = state.drafts.filter(draft => draft.path !== note.path || draft.content !== note.content); changed = true; }
+          return { path: target.path, status: 'replaced', count: result.count, version: noteVersion(note), edits: result.edits };
+        } catch (error) { return replaceFailure(target.path, error); }
+      });
+      if (changed) { const bytes = this.stage(state); await this.persist(bytes, false, state.drafts.length); }
+      this.session(sid); return outcomes;
+    });
   }
   private text(content: string): void { if (typeof content !== 'string' || Buffer.from(content).toString('utf8') !== content) fail('El texto contiene caracteres no válidos.'); }
   private addNote(state: Snapshot, parent: string, title: string, content: string): Note { this.folder(state, parent); this.text(content); const filename = name(title, true); const input = parent ? `${parent}/${filename}` : filename; this.unused(state, input, undefined, true); const note = { id: randomUUID(), path: input, content, revision: 0 }; state.notes.push(note); return note; }

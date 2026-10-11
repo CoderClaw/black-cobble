@@ -1,4 +1,4 @@
-import { constants } from 'node:fs';
+import { constants, type Dirent, type Stats } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -6,6 +6,8 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import type { NoteDocument, PrivateSessionStatus, PrivateDraftInfo, VaultEntry, VaultInfo } from '../shared/types';
 import { isPrivateBytes, parseEnvelope, encryptEnvelope, decryptEnvelope, parseMetadata, wrapKey, unwrapKey, type PrivateMetadata } from './crypto';
 import { rewriteWikiLinks } from '../shared/linkUpdates';
+import { replaceFailure, searchFiles, searchPattern, type ReplaceOutcome, type ReplaceTarget, type SearchOptions, type SearchResult } from '../shared/search';
+import { SEARCH_TOTAL_MS, SearchRunner, SearchTimeoutError, skippable } from './search-runner';
 import { MAX_NOTE_BYTES, counterpartPaths, initialNoteContent, isNotePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
 
 type StorageOptions = {
@@ -13,6 +15,7 @@ type StorageOptions = {
   onChange?: () => void;
   watch?: boolean;
   onPrivateSessionChanged?: (status: PrivateSessionStatus) => void;
+  search?: SearchRunner;
 };
 type Draft = { id: string; path: string; noteId: string; expectedVersion: string; revision: number; updatedAt: number; bytes: Buffer; persisted: boolean; contentHash?: string; sessionId?: string; fallback?: Draft };
 
@@ -51,11 +54,13 @@ export class VaultService {
   private metadataWatcher?: FSWatcher;
   private knownPrivate = new Map<string, string>();
   private drafts = new Map<string, Draft>();
+  private readonly search: SearchRunner;
 
   constructor(root: string, options: StorageOptions = {}) {
     if (!path.isAbsolute(root)) fail('La ruta de la bóveda debe ser absoluta.');
     this.root = path.resolve(root);
     this.options = options;
+    this.search = options.search ?? new SearchRunner();
   }
 
   async initialize(): Promise<VaultInfo> {
@@ -125,6 +130,7 @@ export class VaultService {
     await this.watcher?.close();
     await this.metadataWatcher?.close();
     if (this.changeTimer) clearTimeout(this.changeTimer);
+    if (!this.options.search) this.search.dispose();
   }
 
   private notify(): void {
@@ -561,6 +567,76 @@ export class VaultService {
       this.notify();
       return { path: current.path, content, version: versionOf(bytes), ...(current.encrypted ? { encrypted: true, locked: false, sessionId } : {}) };
     });
+  }
+
+  /**
+   * Plain notes only: encrypted, unreadable or oversized files and folders are skipped, never decrypted.
+   * Writes are atomic renames, so each read stands alone and saves never wait for a search.
+   */
+  async searchNotes(options: SearchOptions): Promise<SearchResult> {
+    if (!searchPattern(options)) return { files: [], truncated: false };
+    const deadline = Date.now() + SEARCH_TOTAL_MS;
+    const notes: string[] = [];
+    const visit = async (relative: string): Promise<void> => {
+      let items: Dirent[];
+      // System errors carry absolute paths; never pass them on.
+      try { items = await fs.readdir(await this.folder(relative), { withFileTypes: true }); }
+      catch { if (!relative) fail('No se puede leer la carpeta de la bóveda.'); return; }
+      for (const item of items) {
+        if (item.name.startsWith('.') || item.isSymbolicLink() || !validName(item.name)) continue;
+        const itemPath = relative ? `${relative}/${item.name}` : item.name;
+        let stat: Stats;
+        try { stat = await fs.lstat(await this.resolve(itemPath)); } catch { continue; }
+        if (stat.isDirectory()) await visit(itemPath);
+        else if (stat.isFile() && isNotePath(item.name)) notes.push(itemPath);
+      }
+    };
+    try {
+      await visit('');
+      return await searchFiles(notes, options, async note => {
+        if (this.disposing) fail('La bóveda se ha cerrado.');
+        try {
+          const { bytes, version } = await this.raw(note);
+          return isPrivateBytes(bytes) || this.knownPrivate.has(note) ? null : { version, content: decoder.decode(bytes) };
+        } catch { return null; }
+      }, (content, format, value, limit) => this.search.find(content, format, value, limit).catch(error => skippable(error, value)), deadline);
+    } finally { this.search.release(); }
+  }
+
+  /** Each note is matched outside the write queue, then written atomically only if its version still holds. */
+  async replaceInNotes(options: SearchOptions, replacement: string, targets: ReplaceTarget[]): Promise<ReplaceOutcome[]> {
+    if (typeof replacement !== 'string' || !Array.isArray(targets)) fail('Argumento no válido.');
+    searchPattern(options);
+    const outcomes: ReplaceOutcome[] = [];
+    let timedOut: SearchTimeoutError | undefined;
+    try {
+      for (const target of targets) {
+        // A runaway pattern would stall on every note: report the rest without trying.
+        if (timedOut) { outcomes.push({ path: target.path, status: 'error', count: 0, message: timedOut.message }); continue; }
+        try {
+          if (this.disposing) fail('La bóveda se ha cerrado.');
+          const relative = this.notePath(target.path);
+          if (relative.split('/').some(part => part.startsWith('.'))) fail('Ruta no válida.');
+          const current = await this.raw(relative).catch(error => { if (isMissing(error)) fail('CONFLICT: La nota se ha eliminado o movido fuera de la aplicación.'); throw error; });
+          if (current.version !== target.version) fail('CONFLICT: La nota ha cambiado fuera de la aplicación.');
+          if (isPrivateBytes(current.bytes) || this.knownPrivate.has(relative)) fail('Las notas cifradas no admiten reemplazos.');
+          let content: string;
+          try { content = decoder.decode(current.bytes); }
+          catch { fail('La nota no contiene texto UTF-8 válido.'); }
+          const result = await this.search.replace(content, noteFormat(relative)!, options, replacement, target.matches);
+          if (!result.count) { outcomes.push({ path: target.path, status: 'replaced', count: 0, version: current.version, edits: [] }); continue; }
+          const bytes = plainBytes(result.content);
+          // replaceNote checks the version again right before the rename.
+          await this.serialized(() => this.replaceNote(relative, bytes, current.version));
+          outcomes.push({ path: target.path, status: 'replaced', count: result.count, version: versionOf(bytes), edits: result.edits });
+        } catch (error) {
+          if (error instanceof SearchTimeoutError && options.regex) timedOut = error;
+          outcomes.push(replaceFailure(target.path, (error as NodeJS.ErrnoException).code ? new Error('No se pudo leer o escribir la nota.') : error));
+        }
+      }
+    } finally { this.search.release(); }
+    if (outcomes.some(outcome => outcome.count)) this.notify();
+    return outcomes;
   }
 
   createNote(parent: string, name: string, format: NoteFormat = 'md'): Promise<NoteDocument> {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent, type MouseEvent } from 'react';
 import { FilePlus2, FolderPlus, FolderOpen, Moon, Sun, Search, Pencil, ArrowRightToLine, Trash2, X, ChevronsLeft, Menu, MoreHorizontal, LockKeyhole, KeyRound } from 'lucide-react';
 import type { NoteDocument, PrivateDraftInfo, PrivateSessionStatus, VaultEntry, VaultInfo } from '../shared/types';
-import MarkdownEditor from './editor/MarkdownEditor';
+import type { ReplaceOutcome, ReplaceTarget, SearchMatch, SearchOptions } from '../shared/search';
+import MarkdownEditor, { type SearchReveal } from './editor/MarkdownEditor';
 import HtmlEditor from './editor/HtmlEditor';
 import { htmlText } from './editor/htmlDocument';
 import { NOTE_EXTENSIONS, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
@@ -10,6 +11,8 @@ import FileTree from './components/FileTree';
 import ContextMenu from './components/ContextMenu';
 import EntryDialog, { type DialogSpec } from './components/EntryDialog';
 import PrivatePasswordDialog, { type PasswordMode } from './components/PrivatePasswordDialog';
+import SearchPanel, { letterKey, type SearchRequest } from './components/SearchPanel';
+import { editorOffset, relocateMatch } from './lib/searchOffsets';
 import { baseName, errorMessage, flattenEntries, isWithin, parentPath, replacePrefix } from './lib/paths';
 import { canMoveEntry, ENTRY_DRAG_TYPE, readEntryDrag, type EntryDragSession } from './lib/treeDnd';
 import './styles.css';
@@ -66,6 +69,13 @@ export default function App() {
   const [passwordError, setPasswordError] = useState('');
   const [privateDrafts, setPrivateDrafts] = useState<PrivateDraftInfo[]>([]);
   const [discardDraft, setDiscardDraft] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(() => preference('boveda.searchOpen', false));
+  const [searchRequest, setSearchRequest] = useState<SearchRequest>({ id: 0, mode: 'search' });
+  // Remounts the search panel: its query and results never outlive the vault, mode or private session.
+  const [searchReset, setSearchReset] = useState(0);
+  const [vaultRevision, setVaultRevision] = useState(0);
+  const [reveal, setReveal] = useState<SearchReveal>();
+  const revealId = useRef(0);
   const capture = useCallback(() => ({ generation: generation.current, vault: vaultRef.current?.path, sessionId: statusRef.current?.sessionId }), []);
   const valid = useCallback((request: ReturnType<typeof capture>) => request.generation === generation.current && request.vault === vaultRef.current?.path && request.sessionId === statusRef.current?.sessionId, []);
   const updateNote = useCallback((next: ActiveNote | null) => {
@@ -86,7 +96,7 @@ export default function App() {
     if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
     hoverFolder.current = null; dragSession.current = null;
     updateNote(null); setEntries([]); setSelected(''); setExpanded(new Set()); setQuery('');
-    setFocusHeading(undefined); setFocusRequest(0); setSourceMode(false);
+    setFocusHeading(undefined); setFocusRequest(0); setSourceMode(false); setReveal(undefined); setSearchReset(previous => previous + 1); setSearchRequest(previous => ({ id: previous.id, mode: previous.mode }));
     setDialog(null); setDialogError(''); setPasswordMode(null); setPasswordError(''); setEntryMenu(false); setContextMenu(null);
     setPrivateDrafts([]); setDiscardDraft(null); setDraggingPath(null); setDropPath(null);
     setSaving(false); setSaveError(false); setError('');
@@ -184,7 +194,7 @@ export default function App() {
       const tree = await window.vault.listEntries();
       if (id !== refreshId.current || !valid(request)) return;
       if (busyRef.current) { refreshTimer.current = setTimeout(() => { void refreshVault(); }, 220); return; }
-      setEntries(tree);
+      setEntries(tree); setVaultRevision(previous => previous + 1);
       if (savePromise.current) await savePromise.current;
       const current = noteRef.current;
       if (!current || busyRef.current) return;
@@ -214,7 +224,7 @@ export default function App() {
       if (!await flush()) throw new Error('La nota actual tiene cambios pendientes.');
       if (!valid(request)) return;
       updateNote({ ...document, savedContent: document.content, conflict: false });
-      setSelected(path); setFocusHeading(heading); setFocusRequest(previous => previous + 1); setSaveError(false);
+      setSelected(path); setFocusHeading(heading); setFocusRequest(previous => previous + 1); setReveal(undefined); setSaveError(false);
       if (vaultRef.current && vaultRef.current.kind !== 'private') remember(`boveda.lastNote.${vaultRef.current.path}`, path);
       setExpanded(previous => {
         const next = new Set(previous); let parent = parentPath(path);
@@ -285,6 +295,7 @@ export default function App() {
     remember('boveda.theme', theme);
   }, [theme]);
   useEffect(() => { if (vault && vault.kind !== 'private') remember(`boveda.expanded.${vault.path}`, [...expanded]); }, [vault, expanded]);
+  useEffect(() => { remember('boveda.searchOpen', searchOpen); }, [searchOpen]);
   useEffect(() => {
     const unsubscribe = window.vault.onVaultChanged(() => {
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
@@ -438,11 +449,74 @@ export default function App() {
     function keydown(event: KeyboardEvent) {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.key.toLowerCase() === 's') { event.preventDefault(); if (!busyRef.current) void flush(); }
-      if (event.key.toLowerCase() === 'n') { event.preventDefault(); if (!dialog) create('note'); }
+      if (event.key.toLowerCase() === 'n') { event.preventDefault(); if (!dialog && !document.querySelector('dialog[open]')) create('note'); }
     }
     window.addEventListener('keydown', keydown);
     return () => window.removeEventListener('keydown', keydown);
   });
+  // Capture phase: the editors must not consume the global search shortcuts.
+  useEffect(() => {
+    function keydown(event: KeyboardEvent) {
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+      const key = letterKey(event);
+      if ((key !== 'f' && key !== 'h') || !vaultRef.current || document.querySelector('dialog[open]')) return;
+      event.preventDefault(); event.stopPropagation();
+      openSearch(key === 'h' ? 'replace' : 'search');
+    }
+    window.addEventListener('keydown', keydown, true);
+    return () => window.removeEventListener('keydown', keydown, true);
+  }, []);
+
+  function openSearch(mode: SearchRequest['mode']) {
+    const editing = !!document.activeElement?.closest('.editor-wrap');
+    const selection = editing ? window.getSelection()?.toString() ?? '' : '';
+    setSearchOpen(true);
+    setSearchRequest(previous => ({ id: previous.id + 1, mode, seed: selection.trim() && !/[\r\n]/.test(selection) ? selection : undefined }));
+  }
+  function focusEditor() {
+    [...document.querySelectorAll<HTMLElement>('.editor-wrap .cm-content, .editor-wrap .html-content')].find(element => element.getClientRects().length > 0)?.focus();
+  }
+  const searchVault = useCallback(async (options: SearchOptions, save: boolean) => {
+    const current = noteRef.current;
+    // The scan reads the disk, so pending edits are saved first.
+    if (save && current && !current.locked && !current.conflict && current.content !== current.savedContent) await flush();
+    const request = capture();
+    const privateMode = vaultRef.current?.kind === 'private';
+    if (privateMode && !request.sessionId) throw new Error('PRIVATE_STALE: La bóveda privada está bloqueada.');
+    const result = await window.vault.searchNotes(options, privateMode ? request.sessionId ?? undefined : undefined);
+    if (privateMode ? !valid(request) : request.vault !== vaultRef.current?.path || vaultRef.current?.kind === 'private') throw new Error('PRIVATE_STALE: La bóveda cambió.');
+    return result;
+  }, [capture, valid, flush]);
+  async function replaceInVault(options: SearchOptions, replacement: string, targets: ReplaceTarget[]): Promise<ReplaceOutcome[] | 'stale' | null> {
+    let outcomes: ReplaceOutcome[] | 'stale' | null = null;
+    await runAction(async () => {
+      const request = capture();
+      const privateMode = vaultRef.current?.kind === 'private';
+      if (privateMode && !request.sessionId) return;
+      // Saving pending edits (just done) changes the open note: its targets would only conflict, so search again first.
+      const open = noteRef.current;
+      if (open && targets.some(target => target.path === open.path && target.version !== open.version)) { outcomes = 'stale'; return; }
+      const result = await window.vault.replaceInNotes(options, replacement, targets, privateMode ? request.sessionId ?? undefined : undefined);
+      // A private-session change does not concern a normal vault, whose files were rewritten anyway.
+      if (privateMode ? !valid(request) : request.vault !== vaultRef.current?.path || vaultRef.current?.kind === 'private') return;
+      outcomes = result;
+      const current = noteRef.current;
+      if (current && result.some(outcome => outcome.path === current.path && outcome.status === 'replaced' && outcome.count > 0)) await reloadNoteAfterPathChange(capture());
+    });
+    return outcomes;
+  }
+  async function openSearchMatch(path: string, match: SearchMatch, version: string, ordinal: number, options: SearchOptions) {
+    if (noteRef.current?.path !== path) await openNote(path);
+    else if (noteRef.current.content !== noteRef.current.savedContent && !noteRef.current.conflict) await flush();
+    const current = noteRef.current;
+    if (current?.path !== path || current.locked) return;
+    // Offsets are only trusted for the scanned version; otherwise the match is found again by line and text.
+    const exact = current.version === version && current.content === current.savedContent && !current.conflict;
+    const range = exact ? { from: editorOffset(current.content, match.start), to: editorOffset(current.content, match.end) } : relocateMatch(current.content, match);
+    setReveal({ path, ...range, text: match.preview.text, ordinal, options, id: ++revealId.current });
+  }
+  // Each request is applied once by the mounted editor (child effects run first), never by a later document.
+  useEffect(() => { if (reveal) setReveal(undefined); }, [reveal]);
 
   async function changeVault() {
     await runAction(async () => {
@@ -698,14 +772,16 @@ export default function App() {
       <footer className="sidebar-footer"><button onClick={() => void changeVault()} disabled={busy}><FolderOpen size={15} />Cambiar bóveda</button><button className="icon-button" title={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'} aria-label={theme === 'dark' ? 'Tema claro' : 'Tema oscuro'} onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}</button></footer>
     </aside>}
     <main className="main-pane">
-      {vault && <header className="note-toolbar">{!sidebarVisible && <button className="icon-button" title="Mostrar archivos" aria-label="Mostrar archivos" onClick={() => setSidebarVisible(true)}><Menu size={18} /></button>}<span className="note-path" title={note?.path}>{note ? <><span className="path-parent">{parentPath(note.path) ? `${parentPath(note.path)} / ` : ''}</span>{stripNoteExtension(baseName(note.path))}</> : vault.name}</span>{note?.encrypted && <LockKeyhole size={15} aria-label="Nota cifrada" />}{note && !note.locked && <button className="view-toggle" title={sourceMode ? `Ver ${htmlNote ? 'HTML' : 'Markdown'} en vivo` : `Ver código ${htmlNote ? 'HTML' : 'Markdown'}`} onClick={() => setSourceMode(!sourceMode)}>{sourceMode ? 'Código fuente' : 'Vista en vivo'}</button>}{!sidebarVisible && privateVault && privateStatus?.unlocked && <button className="icon-button" aria-label="Bloquear bóveda" onClick={() => void lockSession()}><LockKeyhole size={16} /></button>}</header>}
+      {vault && <header className="note-toolbar">{!sidebarVisible && <button className="icon-button" title="Mostrar archivos" aria-label="Mostrar archivos" onClick={() => setSidebarVisible(true)}><Menu size={18} /></button>}<span className="note-path" title={note?.path}>{note ? <><span className="path-parent">{parentPath(note.path) ? `${parentPath(note.path)} / ` : ''}</span>{stripNoteExtension(baseName(note.path))}</> : vault.name}</span>{note?.encrypted && <LockKeyhole size={15} aria-label="Nota cifrada" />}{note && !note.locked && <button className="view-toggle" title={sourceMode ? `Ver ${htmlNote ? 'HTML' : 'Markdown'} en vivo` : `Ver código ${htmlNote ? 'HTML' : 'Markdown'}`} onClick={() => setSourceMode(!sourceMode)}>{sourceMode ? 'Código fuente' : 'Vista en vivo'}</button>}{!sidebarVisible && privateVault && privateStatus?.unlocked && <button className="icon-button" aria-label="Bloquear bóveda" onClick={() => void lockSession()}><LockKeyhole size={16} /></button>}<button className="icon-button" aria-label="Buscar en notas" title="Buscar en notas (Ctrl+Mayús+F)" aria-pressed={searchOpen} onClick={() => { if (searchOpen) setSearchOpen(false); else openSearch('search'); }}><Search size={17} /></button></header>}
       {privateVault && privateStatus?.error && <div className="error-bar" role="alert"><span>{privateStatus.error}</span></div>}
       {privateVault && privateDrafts.length > 0 && privateStatus?.unlocked && <div className="private-recovery" aria-label="Borradores cifrados"><p>Borradores cifrados pendientes</p>{privateDrafts.map(draft => <div key={draft.id}><span>{draft.path}</span>{discardDraft === draft.id ? <><span>¿Descartar este borrador?</span><button disabled={busy} onClick={() => void recoverDraft(draft.id, true)}>Sí, descartar</button><button disabled={busy} onClick={() => setDiscardDraft(null)}>Cancelar</button></> : <><button disabled={busy} onClick={() => void recoverDraft(draft.id)}>Recuperar copia</button><button disabled={busy} onClick={() => setDiscardDraft(draft.id)}>Descartar borrador</button></>}</div>)}</div>}
       {error && !note?.conflict && <div className="error-bar" role="alert"><span>{error}</span>{saveError && <button disabled={busy || saving} onClick={() => void flush()}>Reintentar</button>}<button className="icon-button" aria-label="Cerrar aviso" onClick={() => setError('')}><X size={15} /></button></div>}
       {privateVault && privateStatus?.unlocked && !!privateStatus.recoveryPending && <div className="private-recovery" role="status"><p>{privateStatus.recoveryPending === 1 ? 'Un archivo de recuperación no cabe' : `${privateStatus.recoveryPending} archivos de recuperación no caben`} en la bóveda privada (16 MiB). Siguen cifrados en disco: recupera o descarta borradores, o libera espacio, y vuelve a desbloquear para incorporarlos.</p></div>}
       {note?.conflict && <div className="conflict-bar" role="alert"><p>{note.missing ? 'Esta nota ya no está disponible en la bóveda.' : 'La nota cambió fuera de la aplicación. Tus cambios siguen aquí.'}</p><div><button disabled={busy} onClick={() => void saveCopy()}>Guardar una copia</button><button disabled={busy} onClick={() => void reloadConflict()}>Descartar y {note.missing ? 'cerrar' : 'recargar'}</button></div>{error && <p className="conflict-detail">{error}</p>}</div>}
-      {loading ? <div className="empty-state"><p>Abriendo bóveda…</p></div> : !vault ? <div className="welcome"><FolderOpen size={33} strokeWidth={1.3} /><h1>Black Cobble</h1><p>Tus notas Markdown y HTML en una carpeta.</p><button className="primary-button" disabled={busy} onClick={() => void changeVault()}>{busy ? 'Abriendo…' : 'Abrir o crear una bóveda'}</button><button className="theme-text" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}</button></div> : privateLocked ? <div className="empty-state locked-note"><LockKeyhole size={25} /><p>{privateStatus?.configured ? 'Bóveda privada bloqueada' : 'Crea tu bóveda privada'}</p><button className="primary-button" disabled={busy || passwordBusy || !!privateStatus?.error} onClick={() => openPassword()}>{privateStatus?.configured ? 'Desbloquear bóveda' : 'Crear contraseña'}</button></div> : note ? <><div className="editor-wrap" inert={busy} aria-busy={busy}><NoteEditor key={`${vault.path}:${note.path}:${note.encrypted ? note.sessionId : 'public'}`} value={note.content} onChange={changeContent} notePath={note.path} notePaths={notePaths} onNavigate={navigateWiki} sourceMode={sourceMode} privateMode={privateVault} theme={theme} focusHeading={focusHeading} navigationId={focusRequest} /></div><footer className="note-status"><span aria-live="polite">{note.conflict ? 'Cambios sin guardar' : saving ? 'Guardando…' : saveError ? 'No se ha guardado' : dirty ? 'Cambios pendientes' : 'Guardado'}</span><span>{words} {words === 1 ? 'palabra' : 'palabras'}</span></footer></> : <div className="empty-state"><p>Abre una nota o crea una nueva.</p><button className="primary-button" disabled={!canEdit} onClick={() => create('note')}><FilePlus2 size={16} />Nueva nota</button></div>}
+      {loading ? <div className="empty-state"><p>Abriendo bóveda…</p></div> : !vault ? <div className="welcome"><FolderOpen size={33} strokeWidth={1.3} /><h1>Black Cobble</h1><p>Tus notas Markdown y HTML en una carpeta.</p><button className="primary-button" disabled={busy} onClick={() => void changeVault()}>{busy ? 'Abriendo…' : 'Abrir o crear una bóveda'}</button><button className="theme-text" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? 'Tema claro' : 'Tema oscuro'}</button></div> : privateLocked ? <div className="empty-state locked-note"><LockKeyhole size={25} /><p>{privateStatus?.configured ? 'Bóveda privada bloqueada' : 'Crea tu bóveda privada'}</p><button className="primary-button" disabled={busy || passwordBusy || !!privateStatus?.error} onClick={() => openPassword()}>{privateStatus?.configured ? 'Desbloquear bóveda' : 'Crear contraseña'}</button></div> : note ? <><div className="editor-wrap" inert={busy} aria-busy={busy}><NoteEditor key={`${vault.path}:${note.path}:${note.encrypted ? note.sessionId : 'public'}`} value={note.content} onChange={changeContent} notePath={note.path} notePaths={notePaths} onNavigate={navigateWiki} sourceMode={sourceMode} privateMode={privateVault} theme={theme} focusHeading={focusHeading} navigationId={focusRequest} reveal={reveal} /></div><footer className="note-status"><span aria-live="polite">{note.conflict ? 'Cambios sin guardar' : saving ? 'Guardando…' : saveError ? 'No se ha guardado' : dirty ? 'Cambios pendientes' : 'Guardado'}</span><span>{words} {words === 1 ? 'palabra' : 'palabras'}</span></footer></> : <div className="empty-state"><p>Abre una nota o crea una nueva.</p><button className="primary-button" disabled={!canEdit} onClick={() => create('note')}><FilePlus2 size={16} />Nueva nota</button></div>}
     </main>
+    {vault && <SearchPanel key={`${searchReset}:${privateVault ? privateStatus?.sessionId ?? 'locked' : 'public'}`} open={searchOpen} locked={privateLocked} canEdit={canEdit} busy={busy} revision={vaultRevision} request={searchRequest}
+      onSearch={searchVault} onReplace={replaceInVault} onOpenMatch={(path, match, version, ordinal, options) => void openSearchMatch(path, match, version, ordinal, options)} onEscape={focusEditor} onClose={() => setSearchOpen(false)} />}
     {dialog && <EntryDialog key={`${dialog.kind}:${dialog.path}`} spec={dialog} busy={busy} error={dialogError} onCancel={() => { setDialog(null); setError(''); }} onSubmit={(value, format) => void submitDialog(value, format)} />}
     {contextMenu && canEdit && <ContextMenu x={contextMenu.x} y={contextMenu.y} label={contextMenu.entry ? 'Acciones del archivo' : 'Acciones de la bóveda'} onClose={closeContextMenu}>
       {contextMenu.parent !== undefined && <><button role="menuitem" onClick={() => create('note', contextMenu.parent)}><FilePlus2 size={15} />Nueva nota</button><button role="menuitem" onClick={() => create('folder', contextMenu.parent)}><FolderPlus size={15} />Nueva carpeta</button></>}
