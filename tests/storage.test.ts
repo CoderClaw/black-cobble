@@ -96,6 +96,46 @@ describe('VaultService', () => {
     await expect(vault.moveEntry('Archivo', 'Archivo/Interior')).rejects.toThrow('dentro de sí misma');
   });
 
+  it('rejects names that wikilinks cannot reach, but still moves existing ones (CR02)', async () => {
+    await vault.createNote('', 'Nota');
+    await expect(vault.createNote('', 'uno|dos')).rejects.toThrow();
+    for (const name of ['C# básico', 'a^b', 'x[1]']) {
+      await expect(vault.createNote('', name)).rejects.toThrow('rompen los enlaces');
+      await expect(vault.createFolder('', name)).rejects.toThrow('rompen los enlaces');
+      await expect(vault.renameEntry('Nota.md', name)).rejects.toThrow('rompen los enlaces');
+    }
+    expect((await vault.listEntries()).map(entry => entry.path)).toEqual(['Nota.md']);
+    // A file named by another tool keeps working: it can be opened and moved under its own name.
+    await fs.writeFile(path.join(root, 'C# externo.md'), 'texto');
+    await vault.createFolder('', 'Destino');
+    expect((await vault.readNote('C# externo.md')).content).toBe('texto');
+    await vault.moveEntry('C# externo.md', 'Destino');
+    expect((await vault.readNote('Destino/C# externo.md')).content).toBe('texto');
+  });
+  it('keeps new entries out of folders other tools named with # ^ [ ] |', async () => {
+    await fs.mkdir(path.join(root, 'C#'));
+    await fs.writeFile(path.join(root, 'C#', 'Dentro.md'), 'dentro');
+    await vault.createNote('', 'Fuera');
+    await expect(vault.createNote('C#', 'Nueva')).rejects.toThrow('La carpeta «C#»');
+    await expect(vault.createFolder('C#', 'Sub')).rejects.toThrow('La carpeta «C#»');
+    await expect(vault.moveEntry('Fuera.md', 'C#')).rejects.toThrow('La carpeta «C#»');
+    expect(await fs.readdir(path.join(root, 'C#'))).toEqual(['Dentro.md']);
+    // What is already inside can still be renamed in place.
+    expect(await vault.renameEntry('C#/Dentro.md', 'Renombrada')).toBe('C#/Renombrada.md');
+  });
+  it('refuses a move that would leave a link pointing at an unlinkable path, without touching disk', async () => {
+    await fs.mkdir(path.join(root, 'Old', 'C#'), { recursive: true });
+    await fs.mkdir(path.join(root, 'Z'));
+    await fs.writeFile(path.join(root, 'Old', 'C#', 'Nota.md'), 'vieja');
+    await fs.writeFile(path.join(root, 'Z', 'Nota.md'), 'zeta');
+    await fs.writeFile(path.join(root, 'Index.md'), '[[Nota]]');
+    await vault.createFolder('', 'ZZ');
+    const before = await vault.readNote('Index.md');
+    await expect(vault.moveEntry('Old', 'ZZ')).rejects.toThrow('# ^ [ ] |');
+    expect((await vault.readNote('Old/C#/Nota.md')).content).toBe('vieja');
+    expect((await vault.readNote('Index.md')).version).toBe(before.version);
+    expect(await fs.readdir(path.join(root, 'ZZ'))).toEqual([]);
+  });
   it('rejects collisions and never overwrites existing entries', async () => {
     await vault.createNote('', 'Uno');
     await vault.createNote('', 'Dos');

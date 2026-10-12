@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron, type ElectronApplication } from '@playwright/test';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -160,4 +160,61 @@ test('development server mounts React under CSP and handles early close', async 
     if (app) await app.close();
     await server.close();
   }
+});
+
+test('saving a copy of a note other tools placed in a folder named with # goes to the vault root', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'boveda-copy-unlinkable-'));
+  const vault = path.join(root, 'vault');
+  await mkdir(path.join(vault, 'C#'), { recursive: true });
+  await writeFile(path.join(vault, 'C#', 'Apuntes #1.md'), '# Apuntes\n\n[[../Raíz]]\n');
+  await writeFile(path.join(vault, 'Raíz.md'), '# Raíz\n');
+  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), BOVEDA_TEST_VAULT: vault, BOVEDA_USER_DATA: path.join(root, 'profile') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ args: [path.resolve('dist-electron/main.cjs')], env });
+  try {
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'C#', exact: true }).click();
+    await page.getByRole('button', { name: 'Apuntes #1', exact: true }).click();
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.insertText('Mi cambio local');
+    await writeFile(path.join(vault, 'C#', 'Apuntes #1.md'), '# Cambio externo\n');
+    await page.getByRole('button', { name: 'Guardar una copia' }).click();
+    // New names never carry # ^ [ ] |, and a folder named with them accepts no new notes.
+    await expect(page.locator('.note-path')).toContainText('Apuntes 1 copia');
+    const copy = await readFile(path.join(vault, 'Apuntes 1 copia.md'), 'utf8');
+    expect(copy).toContain('Mi cambio local');
+    // From the root, ../Raíz no longer resolves: the copy's link was adapted to keep its destination.
+    expect(copy).toContain('[[/Raíz]]');
+    expect(await readFile(path.join(vault, 'C#', 'Apuntes #1.md'), 'utf8')).toBe('# Cambio externo\n');
+  } finally { await app.close(); }
+});
+
+test('a copy whose link would point at another note is refused without leaving an empty note', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'boveda-copy-refused-'));
+  const vault = path.join(root, 'vault');
+  await mkdir(path.join(vault, 'C#'), { recursive: true });
+  // From the root, ./Otra would reach the root Otra.md instead of C#/Otra.md.
+  await writeFile(path.join(vault, 'C#', 'Fuente.md'), '# Fuente\n\n[[./Otra]]\n');
+  await writeFile(path.join(vault, 'C#', 'Otra.md'), '# Otra en C#\n');
+  await writeFile(path.join(vault, 'Otra.md'), '# Otra en la raíz\n');
+  const env: Record<string, string> = { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)), BOVEDA_TEST_VAULT: vault, BOVEDA_USER_DATA: path.join(root, 'profile') };
+  delete env.ELECTRON_RUN_AS_NODE;
+  const app = await electron.launch({ args: [path.resolve('dist-electron/main.cjs')], env });
+  try {
+    const page = await app.firstWindow();
+    await page.getByRole('button', { name: 'C#', exact: true }).click();
+    await page.getByRole('button', { name: 'Fuente', exact: true }).click();
+    await page.locator('.cm-content').click();
+    await page.keyboard.press('Control+End');
+    await page.keyboard.insertText('Mi cambio local');
+    await writeFile(path.join(vault, 'C#', 'Fuente.md'), '# Cambio externo\n');
+    await page.getByRole('button', { name: 'Guardar una copia' }).click();
+    await expect(page.locator('body')).toContainText('# ^ [ ] |');
+    expect((await readdir(vault)).sort()).toEqual(['C#', 'Otra.md']);
+    await expect(page.locator('.cm-content')).toContainText('Mi cambio local');
+    // Leave the conflict the usual way so the app can close without asking about it.
+    await page.getByRole('button', { name: 'Descartar y recargar' }).click();
+    await expect(page.locator('.cm-content')).toContainText('Cambio externo');
+  } finally { await app.close(); }
 });

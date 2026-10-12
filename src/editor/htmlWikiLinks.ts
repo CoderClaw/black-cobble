@@ -2,7 +2,7 @@ import { InputRule, Mark, mergeAttributes } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import Suggestion, { type SuggestionProps } from '@tiptap/suggestion';
-import { linkTargetFor } from '../../shared/notes';
+import { linkTargetFor, linkablePath } from '../../shared/notes';
 import { wikiLinkLabelRange } from './wikilinks';
 
 export interface WikiLinkOptions {
@@ -126,7 +126,7 @@ export const WikiLink = Mark.create<WikiLinkOptions>({
         allow: ({ state, range }) => !state.doc.resolve(range.from).marks().some(mark => mark.type.name === 'code'),
         items: ({ query }) => {
           const wanted = query.trim().toLocaleLowerCase();
-          return [...notePaths()].sort().filter(path => linkTargetFor(path).toLocaleLowerCase().includes(wanted)).slice(0, 50);
+          return notePaths().filter(linkablePath).sort().filter(path => linkTargetFor(path).toLocaleLowerCase().includes(wanted)).slice(0, 50);
         },
         command: ({ editor: target, range, props: path }) => {
           const link = linkTarget(path);

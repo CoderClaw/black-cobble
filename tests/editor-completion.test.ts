@@ -19,6 +19,10 @@ describe('wiki autocompletion', () => {
     expect(complete('[[Inicio|alias')).toBeNull();
     expect(complete('[[Inicio#Resumen')).toBeNull();
   });
+  it('leaves out notes whose names cannot be written as a link (CR02)', () => {
+    const context = new CompletionContext(EditorState.create({ doc: '[[', extensions: [markdown()] }), 2, false);
+    expect(wikiCompletions(context, ['C.md', 'C# básico.md', 'a^b.md', 'x[1]/Nota.md', 'Normal.md'])?.options.map(option => option.label)).toEqual(['C', 'Normal']);
+  });
   it('requires opening wiki brackets', () => {
     expect(complete('Plain note')).toBeNull();
   });

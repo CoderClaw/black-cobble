@@ -225,6 +225,15 @@ describe('whole private vault', () => {
     await vault.unlockPrivateSession(password);
     expect((await vault.readNote(note.path)).content).toBe('contenido actual');
   });
+  it('rejects private names that wikilinks cannot reach (CR02)', async () => {
+    await open(); await vault.createNote('', 'Nota');
+    for (const name of ['C# básico', 'a^b', 'x[1]']) {
+      await expect(vault.createNote('', name)).rejects.toThrow('rompen los enlaces');
+      await expect(vault.createFolder('', name)).rejects.toThrow('rompen los enlaces');
+      await expect(vault.renameEntry('Nota.md', name)).rejects.toThrow('rompen los enlaces');
+    }
+    expect((await vault.listEntries()).map(entry => entry.path)).toEqual(['Nota.md']);
+  });
   it('rejects cross-vault paths and private tokens on normal writes', async () => {
     const publicNote = await vault.createNote('', 'Public'); const id = await open(); await vault.createNote('', 'Private');
     await vault.selectMode('normal'); expect(vault.getPrivateSession().unlocked).toBe(false);

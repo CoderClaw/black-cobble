@@ -1,40 +1,60 @@
 import { parser } from '@lezer/markdown';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 import { parseWikiLink, resolveWikiLink } from '../src/editor/wikilinks';
-import { noteFormat, stripNoteExtension } from './notes';
+import { linkablePath, noteFormat, stripNoteExtension } from './notes';
 
-type Context = { sourceBefore: string; sourceAfter: string; pathsBefore: string[]; pathsAfter: string[]; pathMap: Map<string, string> };
+type Context = { sourceBefore: string; sourceAfter: string; pathsBefore: string[]; pathsAfter: string[]; pathMap: Map<string, string>; keepUnreachable: boolean };
 type ParentNode = DefaultTreeAdapterMap['parentNode'];
 type Element = DefaultTreeAdapterMap['element'];
 
-/** Keep each existing link's resolved destination across a note or folder move. */
+/**
+ * Keep each existing link's resolved destination across a note or folder move. A destination no link can name
+ * (# ^ [ ] | in its path) makes the rewrite throw; with `keepUnreachable` that link is left as written instead, as long
+ * as it then reaches no other note.
+ */
 export function rewriteWikiLinks(
   content: string,
   sourceBefore: string,
   sourceAfter: string,
   pathsBefore: string[],
   pathMap: Map<string, string>,
+  { keepUnreachable = false } = {},
 ): string {
-  const context: Context = { sourceBefore, sourceAfter, pathsBefore, pathsAfter: pathsBefore.map(note => pathMap.get(note) ?? note), pathMap };
+  const context: Context = { sourceBefore, sourceAfter, pathsBefore, pathsAfter: pathsBefore.map(note => pathMap.get(note) ?? note), pathMap, keepUnreachable };
   return noteFormat(sourceBefore) === 'html' ? rewriteHtml(content, context) : rewriteMarkdown(content, context);
 }
 
 /** The new [[...]] contents, or null when the link still reaches its destination. */
 function relink(inner: string, context: Context): string | null {
+  // A heading-only link ([[#Parte]]) always means the document it is written in.
+  if (!parseWikiLink(inner).path) return null;
   const before = resolveWikiLink(inner, context.sourceBefore, context.pathsBefore);
   if (!before) return null;
   const intended = context.pathMap.get(before) ?? before;
   if (resolveWikiLink(inner, context.sourceAfter, context.pathsAfter) === intended) return null;
-  const originalPath = parseWikiLink(inner).path;
-  // A leading slash forces root notes to resolve as paths instead of sibling names.
-  let replacement = intended.includes('/') ? intended : `/${intended}`;
-  if (!noteFormat(originalPath)) replacement = stripNoteExtension(replacement);
+  // A table's \| leaves its backslash on the path: drop it so an explicit .html keeps its preference.
+  const originalPath = parseWikiLink(inner).path.replace(/[\s\\]+$/, '');
   const separator = inner.search(/[#|]/);
   const pathEnd = separator < 0 ? inner.length : separator;
   const pathPart = inner.slice(0, pathEnd);
   const leading = pathPart.match(/^\s*/)?.[0] ?? '';
-  const trailing = pathPart.match(/\s*$/)?.[0] ?? '';
-  return `${leading}${replacement}${trailing}${inner.slice(pathEnd)}`;
+  // Inside a Markdown table the alias pipe is escaped as \|: keep that backslash, which belongs to the table. Spaces
+  // before it still belong to the old name, so only those after it are kept.
+  const trailing = pathPart.match(inner[pathEnd] === '|' ? /\\*\s*$/ : /\s*$/)?.[0] ?? '';
+  const link = (target: string) => `${leading}${target}${trailing}${inner.slice(pathEnd)}`;
+  // A leading slash forces root notes to resolve as paths instead of sibling names.
+  let replacement = intended.includes('/') ? intended : `/${intended}`;
+  if (!noteFormat(originalPath)) replacement = stripNoteExtension(replacement);
+  if (linkablePath(intended)) return link(replacement);
+  // No path can name that destination, but its bare name still can, with or without extension, when the link as
+  // written (escape included) reaches only that note.
+  const names = [...new Set([replacement.split('/').pop()!, intended.split('/').pop()!])].filter(linkablePath);
+  const reachable = names.map(link).find(candidate => resolveWikiLink(candidate, context.sourceAfter, context.pathsAfter) === intended);
+  if (reachable !== undefined) return reachable;
+  // Kept as written only while it then reaches no note: it must never quietly point somewhere else.
+  if (context.keepUnreachable && !resolveWikiLink(inner, context.sourceAfter, context.pathsAfter)) return null;
+  // Refuse before anything is written instead of leaving a broken or redirected link.
+  throw new Error(`No se puede actualizar el enlace a «${intended}»: su ruta contiene # ^ [ ] |, que los enlaces no admiten. Cambia ese nombre primero.`);
 }
 
 function rewriteMarkdown(content: string, context: Context): string {
