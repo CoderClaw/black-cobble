@@ -713,9 +713,15 @@ export class VaultService {
       }
       const after = pathMap.get(note) ?? note;
       const rewritten = rewriteWikiLinks(content, note, after, pathsBefore, pathMap);
-      const bytes = rewritten === content ? original.bytes : sid
-        ? encryptEnvelope(this.requireSession(sid), this.metadata!.vaultId, parseEnvelope(original.bytes).noteId, rewritten)
-        : Buffer.from(rewritten, 'utf8');
+      // Every rewrite is checked before anything moves, so the whole operation fails or none of it does.
+      let bytes = original.bytes;
+      if (rewritten !== content) {
+        if (sid) bytes = encryptEnvelope(this.requireSession(sid), this.metadata!.vaultId, parseEnvelope(original.bytes).noteId, rewritten);
+        else {
+          try { bytes = plainBytes(rewritten); }
+          catch (error) { fail(`No se pueden actualizar los enlaces de ${note}: ${error instanceof Error ? error.message : String(error)}`); }
+        }
+      }
       snapshots.push({ ...original, after, bytesAfter: bytes, sid });
     }
     const move = async () => {

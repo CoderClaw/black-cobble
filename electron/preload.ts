@@ -59,7 +59,6 @@ const api: VaultAPI = {
   recoverPrivateDraft: (id, sessionId) => ipcRenderer.invoke('private:recover', id, sessionId),
   discardPrivateDraft: (id, sessionId) => ipcRenderer.invoke('private:discard', id, sessionId),
   createPrivateCopy: (parent, name, content, sessionId) => ipcRenderer.invoke('private:copy', parent, name, content, sessionId),
-  privateActivity: () => ipcRenderer.send('private:activity'),
   acknowledgePrivateLock: () => ipcRenderer.send('private:lock-ack'),
   onPrivateSessionChanged: callback => {
     const listener = (_event: Electron.IpcRendererEvent, status: PrivateSessionStatus) => callback(status);

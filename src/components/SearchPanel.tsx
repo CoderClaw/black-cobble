@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { CaseSensitive, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, Ellipsis, FileCode2, FileText, ListX, RefreshCw, Regex, Replace, ReplaceAll, WholeWord, X } from 'lucide-react';
 import { expandReplacement, searchPattern, type ReplaceEdit, type ReplaceOutcome, type ReplaceTarget, type SearchFileResult, type SearchMatch, type SearchOptions, type SearchResult } from '../../shared/search';
 import { noteFormat } from '../../shared/notes';
+import { useModalDialog } from './useModalDialog';
 import { baseName, errorMessage, parentPath } from '../lib/paths';
 
 export interface SearchRequest { id: number; mode: 'search' | 'replace'; seed?: string }
@@ -77,14 +78,17 @@ function replaceSummary(outcomes: ReplaceOutcome[]): string {
   return parts.join(' ');
 }
 
-function ConfirmReplace({ message, onCancel, onConfirm }: { message: string; onCancel: () => void; onConfirm: () => void }) {
+function ConfirmReplace({ message, onCancel, onConfirm, fallbackFocus }: { message: string; onCancel: () => void; onConfirm: () => void; fallbackFocus: () => HTMLElement | null }) {
   const element = useRef<HTMLDialogElement>(null);
-  useEffect(() => { element.current?.showModal(); }, []);
-  return <dialog ref={element} className="entry-dialog" onCancel={event => { event.preventDefault(); onCancel(); }}>
+  const titleId = useId();
+  const descriptionId = useId();
+  // While replacing, the Reemplazar todo button that opened this is disabled and cannot take focus back.
+  useModalDialog(element, { fallback: fallbackFocus });
+  return <dialog ref={element} className="entry-dialog" aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={event => { event.preventDefault(); onCancel(); }}>
     <form onSubmit={event => { event.preventDefault(); onConfirm(); }}>
-      <h2>Reemplazar todo</h2>
-      <p>{message}</p>
-      <div className="dialog-actions"><button type="button" onClick={onCancel}>Cancelar</button><button type="submit" className="primary-button" autoFocus>Reemplazar</button></div>
+      <h2 id={titleId}>Reemplazar todo</h2>
+      <p id={descriptionId}>{message}</p>
+      <div className="dialog-actions"><button type="button" onClick={onCancel}>Cancelar</button><button type="submit" className="primary-button">Reemplazar</button></div>
     </form>
   </dialog>;
 }
@@ -402,6 +406,6 @@ export default function SearchPanel(props: Props) {
         {more && <li><button className="search-more" onClick={() => setRowLimit(limit => limit + ROW_BUDGET)}>Mostrar más resultados</button></li>}
       </ul>
     </>}
-    {confirm && <ConfirmReplace message={confirm.message} onCancel={() => setConfirm(null)} onConfirm={() => { const spec = confirm; setConfirm(null); void replace(spec.entries, spec.options, spec.replacement); }} />}
+    {confirm && <ConfirmReplace message={confirm.message} fallbackFocus={() => replaceInput.current} onCancel={() => setConfirm(null)} onConfirm={() => { const spec = confirm; setConfirm(null); void replace(spec.entries, spec.options, spec.replacement); }} />}
   </aside>;
 }

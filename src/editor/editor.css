@@ -25,6 +25,7 @@
 .markdown-editor .cm-md-rule { display: inline-block; width: 100%; border-top: 1px solid var(--border); vertical-align: middle; }
 .markdown-editor .cm-md-image { display: inline-block; max-width: 100%; vertical-align: middle; }
 .markdown-editor .cm-md-image img { display: block; max-width: 100%; max-height: 420px; border-radius: 4px; object-fit: contain; }
+.markdown-editor .cm-md-image-blocked { display: inline-block; max-width: 100%; padding: 2px 8px; border: 1px dashed var(--border); border-radius: 4px; color: var(--muted); font-size: .9em; vertical-align: middle; }
 .markdown-editor .cm-md-link, .markdown-editor .cm-wiki-link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .markdown-editor .cm-wiki-unresolved { text-decoration-style: dashed; color: var(--muted); }
 .markdown-editor .cm-md-table-row { font-family: ui-monospace, Consolas, monospace; font-size: .9em; border-bottom: 1px solid var(--border); }
@@ -70,7 +71,7 @@
 .html-content th { font-weight: 650; background: var(--panel); text-align: left; }
 .html-content .selectedCell { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .html-content img { display: block; max-width: 100%; max-height: 420px; border-radius: 4px; object-fit: contain; }
-.html-content img.is-blocked { min-width: 120px; min-height: 40px; border: 1px dashed var(--border); }
+.html-content .is-blocked { display: block; max-width: 100%; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 4px; color: var(--muted); font-size: .9em; }
 .html-content ::selection { background: color-mix(in srgb, var(--accent) 27%, transparent); }
 .wiki-suggest { position: fixed; z-index: 50; display: flex; flex-direction: column; max-height: 260px; min-width: 220px; overflow: auto; padding: 3px; background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 5px; box-shadow: 0 6px 20px rgb(0 0 0 / .25); }
 .wiki-suggest[hidden], .html-editor[hidden], .html-source[hidden] { display: none; }

@@ -37,7 +37,6 @@ export interface VaultAPI {
   recoverPrivateDraft(id: string, sessionId: string): Promise<NoteDocument>;
   discardPrivateDraft(id: string, sessionId: string): Promise<void>;
   createPrivateCopy(parent: string, name: string, content: string, sessionId: string): Promise<NoteDocument>;
-  privateActivity(): void;
   acknowledgePrivateLock(): void;
   onPrivateSessionChanged(callback: (status: PrivateSessionStatus) => void): () => void;
 }

@@ -2,7 +2,7 @@
 
 Fecha: 9 de octubre de 2026. Referencia del código: `3cede7c710d2ffc86da15f07c986d0dfdb682202`.
 
-Este registro complementa [AUDITORIA.md](AUDITORIA.md). Distingue resultados de la aplicación, restricciones del entorno y pruebas específicas de los hallazgos.
+Este registro complementa [AUDITORIA-CERRADA.md](AUDITORIA-CERRADA.md). Distingue resultados de la aplicación, restricciones del entorno y pruebas específicas de los hallazgos.
 
 ## Entorno
 
@@ -98,3 +98,13 @@ No se ejecutó una explotación ni se estableció que las entradas del editor ll
 - Investigar el fallo intermitente de renombrado si reaparece en Windows.
 
 No se ejecutó `npm run package` ni el smoke test del ejecutable existente: hacerlo sobre un artefacto anterior no habría validado necesariamente el código auditado.
+
+## Cierre
+
+Cerrada el 12 de octubre de 2026 junto con [AUDITORIA-CERRADA.md](AUDITORIA-CERRADA.md), cuya sección de cierre recoge la resolución de cada hallazgo. Estado de los pendientes de validación anteriores:
+
+- **F05–F08:** tienen pruebas de interfaz dedicadas en `tests/e2e/html-notes.spec.ts` y `tests/e2e/dialog-accessibility.spec.ts`.
+- **Medición de rendimiento:** se hizo en Node y no en Electron (CR03 de la auditoría del 12 de octubre). La medición en Electron sigue pendiente allí.
+- **Lector de pantalla:** sigue sin probarse. La navegación por teclado de los diálogos ya está cubierta por E2E.
+- **Ejecutable empaquetado:** se generó un AppImage nuevo y pasó la prueba de humo. El ejecutable portátil de Windows no se regeneró.
+- **Fallo de renombrado en Windows:** no reapareció. No se probó en Windows.

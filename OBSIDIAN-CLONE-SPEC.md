@@ -293,9 +293,9 @@ Code regions and escaped wiki brackets remain literal and do not become navigabl
 
 ### Images and HTML
 
-Image widgets accept `http:` or `https:` URLs and base64 `data:image` sources limited to PNG, JPEG, GIF, and WebP. They reject local files, relative attachment paths, `javascript:` sources, and SVG data images. Recognized inline syntax supports alt text and an optional quoted title. Images load lazily, request editor measurement on load/error, and are constrained to the editor width and a 420-pixel maximum height.
+Image widgets accept `https:` URLs and base64 `data:image` sources limited to PNG, JPEG, GIF, and WebP. They reject `http:` URLs (the CSP only allows HTTPS images), local files, relative attachment paths, `javascript:` sources, and SVG data images; rejected sources render as an accessible placeholder that names the reason and keeps the alt text. Recognized inline syntax supports alt text and an optional quoted title. Images load lazily, request editor measurement on load/error, and are constrained to the editor width and a 420-pixel maximum height.
 
-In normal notes, remote images can make network requests automatically when previewed. In private notes, HTTP/HTTPS image syntax becomes an explicit clickable external link rather than an image request. Embedded allowed data images can still display privately.
+In normal notes, remote images can make network requests automatically when previewed. In private notes, HTTPS image syntax becomes an explicit clickable external link rather than an image request; HTTP images keep the rejected-source placeholder. Embedded allowed data images can still display privately.
 
 In Markdown notes raw HTML remains text; preview does not evaluate HTML or scripts. HTML notes are covered in section 7A. There is no HTML renderer, local-attachment loader, PDF/media embed, note transclusion, formula renderer, or Mermaid renderer.
 
@@ -327,7 +327,7 @@ Resolution is shared with Markdown: bare names try `.md`, then `.html`. Moving o
 
 ### Security
 
-HTML notes are untrusted input. The body is parsed into the editor schema, which keeps only known nodes, marks and attributes: scripts, styles, event handlers, forms, frames and objects never reach the DOM, and `javascript:` links are dropped. Parsing uses an inert document, so nothing runs or loads during parsing. Images render through a node view that applies the Markdown image policy (HTTP/HTTPS or PNG/JPEG/GIF/WebP data, remote images blocked in the private vault) without changing the saved `src`. Word counts parse the body with an inert `DOMParser`. The CSP adds `form-action 'none'` and `frame-src 'none'`.
+HTML notes are untrusted input. The body is parsed into the editor schema, which keeps only known nodes, marks and attributes: scripts, styles, event handlers, forms, frames and objects never reach the DOM, and `javascript:` links are dropped. Parsing uses an inert document, so nothing runs or loads during parsing. Images render through a node view that applies the Markdown image policy (HTTPS or PNG/JPEG/GIF/WebP data; HTTP and other sources show an accessible placeholder; remote images blocked in the private vault) without changing the saved `src`. Word counts parse the body with an inert `DOMParser`. The CSP adds `form-action 'none'` and `frame-src 'none'`.
 
 Sources: [formats](shared/notes.ts), [HTML editor](src/editor/HtmlEditor.tsx), [HTML wikilinks](src/editor/htmlWikiLinks.ts), [document helpers](src/editor/htmlDocument.ts), [link rewriting](shared/linkUpdates.ts), [unit tests](tests/html-notes.test.ts), [desktop tests](tests/e2e/html-notes.spec.ts).
 
@@ -636,7 +636,6 @@ Sources: [shared types](shared/types.ts), [crypto definitions](electron/crypto.t
 | `onPrivateSessionChanged` | `private:changed` | Main sends current status; subscription receives it |
 | `onBeforeClose` | `vault:before-close` | Buffered early-close delivery to current callbacks |
 | `confirmClose` | `vault:confirm-close` | Renderer requests main's final close flow |
-| `privateActivity` | `private:activity` | Explicit API remains exposed; isolated preload reports trusted input automatically |
 | `acknowledgePrivateLock` | `private:lock-ack` | Cancels main's renderer-replacement deadline |
 
 Each subscription returns an unsubscribe function. Private status subscription wraps the Electron event and passes only status to application code.

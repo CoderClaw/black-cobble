@@ -11,7 +11,7 @@ import { html } from '@codemirror/lang-html';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { AlignCenter, AlignLeft, AlignRight, Bold, Code, Heading1, Heading2, Heading3, Italic, List, ListChecks, ListOrdered, Minus, Quote, Redo2, SquareCode, Strikethrough, Table, Undo2 } from 'lucide-react';
 import { editedText, revealRange, syncDocument, type MarkdownEditorProps as NoteEditorProps } from './MarkdownEditor';
-import { safeImageSource } from './livePreview';
+import { blockedImageLabel, privateImageLabel, remoteImageSource, safeImageSource } from './livePreview';
 import { headingKey, parseWikiLink, resolveWikiLink, wikiTargetFor } from './wikilinks';
 import { WikiLink, wikiLinkRefresh } from './htmlWikiLinks';
 import { HtmlTextAlign, blockAlignment } from './htmlAlign';
@@ -47,6 +47,16 @@ export function textOccurrences(text: string, needle: string): Array<[number, nu
   return [...text.matchAll(new RegExp(source, 'gu'))].map(match => [match.index, match.index + match[0].length]);
 }
 
+function blockedImage(label: string): HTMLElement {
+  const element = document.createElement('span');
+  element.className = 'is-blocked';
+  element.setAttribute('role', 'img');
+  element.setAttribute('aria-label', label);
+  element.title = label;
+  element.textContent = label;
+  return element;
+}
+
 function openLink(anchor: HTMLAnchorElement, onNavigate: (target: string) => void) {
   const wiki = anchor.dataset.wikilink;
   if (wiki !== undefined) { onNavigate(wiki); return; }
@@ -79,11 +89,13 @@ function RichHtmlEditor(props: ModeProps) {
     const SafeImage = Image.extend({
       addNodeView() {
         return ({ node }) => {
-          const image = document.createElement('img');
           const source = String(node.attrs.src ?? '');
-          if (safeImageSource(source) && !(latest.current.privateMode && /^https?:/i.test(source))) image.src = source;
-          else image.className = 'is-blocked';
-          image.alt = String(node.attrs.alt ?? '');
+          const alt = String(node.attrs.alt ?? '');
+          if (!safeImageSource(source)) return { dom: blockedImage(blockedImageLabel(source, alt)) };
+          if (latest.current.privateMode && remoteImageSource(source)) return { dom: blockedImage(privateImageLabel(alt)) };
+          const image = document.createElement('img');
+          image.src = source;
+          image.alt = alt;
           if (node.attrs.title) image.title = String(node.attrs.title);
           return { dom: image };
         };

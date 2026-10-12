@@ -36,7 +36,7 @@ Se coordinaron tres subagentes solicitados como GPT-6.1 Sol con razonamiento hig
 
 La coordinación contrastó los hallazgos, eliminó duplicados, ejecutó la compilación y las suites existentes, consultó los avisos de dependencias y revisó la captura oscura generada por las pruebas. Las reproducciones utilizaron bóvedas temporales. No se utilizó Brave.
 
-Las referencias `archivo:línea` corresponden al commit indicado y permiten localizar el código con el editor o `rg`. Los resultados completos de validación y sus límites están en [VERIFICACION.md](VERIFICACION.md).
+Las referencias `archivo:línea` corresponden al commit indicado y permiten localizar el código con el editor o `rg`. Los resultados completos de validación y sus límites están en [VERIFICACION-CERRADA.md](VERIFICACION-CERRADA.md).
 
 ## Problemas
 
@@ -225,3 +225,34 @@ No se encontró una fuga de red en la prueba específica de `DOMParser` con una 
 El borrado privado permanente, la ausencia de recuperación de contraseña, la compatibilidad limitada de HTML con Obsidian y el intervalo entre comprobar la versión y reemplazar el archivo están documentados. No se presentan como descubrimientos nuevos.
 
 No se realizó una evaluación criptográfica formal, una sesión con lector de pantalla, un benchmark de bóvedas grandes ni una prueba del ejecutable portátil recién empaquetado. Tampoco se concluye que la aplicación esté libre de otros fallos por superar las pruebas existentes.
+
+## Cierre
+
+**Estado: cerrada** el 12 de octubre de 2026. La cierra Claude Opus 5.5, coordinador de la segunda auditoría, a petición del responsable del proyecto. Las correcciones finales las revisó GPT-6.1 Sol en tres turnos, y se resolvieron los cinco problemas que encontró (RV01–RV05).
+
+### Hallazgos
+
+| ID | Resolución | Commit |
+| --- | --- | --- |
+| F01 | Corregido. El cuerpo se localiza con parse5. Quedan dos residuales menores, CR04 y CR05, que sigue la auditoría del 12 de octubre. | `8fba6b5` |
+| F02 | Corregido. Hay un único límite de 32 MiB en bytes para IPC, lectura y escritura. Renombrar o mover también valida cada reescritura de enlaces antes de tocar el disco, lo que resuelve GS02. Hay regresiones para ASCII, CJK y emoji en el límite y por encima de él, y para un rechazo que no cambia nada en disco. | `0e7abfc`, `634e4a6` |
+| F03 | Corregido. Las recuperaciones que no caben quedan pendientes y ya no bloquean el desbloqueo. La auditoría del 12 de octubre encontró la regresión GS01 al cambiar la contraseña, que se sigue allí. | `0e7abfc` |
+| F04 | Corregido. El autocompletado escribe un destino que resuelve a la nota elegida. El residual de los nombres con `#` es CR02. | `8fba6b5` |
+| F05 | Corregido. Las dos vistas siguen montadas y conservan su historial. El residual de los cambios externos al deshacer es CR06. | `8fba6b5` |
+| F06 | Corregido con una política única: se cargan imágenes HTTPS y datos raster en base64. HTTP y las fuentes no admitidas muestran un marcador accesible con el texto alternativo, igual en Markdown y en HTML. La CSP no se amplió. El bloqueo de imágenes remotas en la bóveda privada usa el protocolo normalizado, porque la revisión detectó que un espacio o un carácter de control inicial lo eludía. README y la especificación están actualizados. | `634e4a6` |
+| F07 | Corregido. Las flechas mueven el foco junto con la selección. | `8fba6b5` |
+| F08 | Corregido. Los tres diálogos (`EntryDialog`, `PrivatePasswordDialog` y la confirmación de «Reemplazar todo») tienen `aria-labelledby` y, cuando corresponde, `aria-describedby`. El hook `useModalDialog` devuelve el foco al control de origen, también en StrictMode y cuando el origen queda deshabilitado. El E2E `tests/e2e/dialog-accessibility.spec.ts` cubre nombre, descripción, foco inicial, Tab y Shift+Tab dentro del diálogo y restitución del foco. No hubo sesión con lector de pantalla. | `634e4a6` |
+| F09 | Corregido. El override `global-agent@^4.1.3` elimina `roarr` y `sprintf-js@1.1.3`, y `npm audit` da 0 avisos el 12 de octubre de 2026. Se regeneró el AppImage de Linux y la prueba de humo del paquete pasa. El paquete de Windows no se regeneró. | `634e4a6` |
+
+### Oportunidades de mejora
+
+| ID | Resolución |
+| --- | --- |
+| O01, O02 | Medidas y trasladadas como CR03 a [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md). |
+| O03, O04, O05, O06, O07, O08 | Sin cambios. Pasan a la lista de mejoras heredadas de [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md). |
+| O09 | Hecho. El renderer ya no expone `privateActivity`, y la actividad llega solo desde los eventos confiables del preload (`634e4a6`). |
+| O10 | Confirmado y trasladado como GS03 (reloj) y GS04 (varias instancias) a [AUDITORIA-2026-10-12.md](AUDITORIA-2026-10-12.md). |
+
+### Verificación del cierre
+
+Se ejecutó sobre el commit `634e4a6` en Linux (Fedora 44, Node.js 22.14.0). Typecheck sin errores. Vitest: 242 pruebas superadas y 3 omitidas. Build correcto. Playwright: 40 de 40 E2E superadas, incluidas las 13 nuevas de diálogos. `npm audit`: 0 avisos. `npm run package:linux` y `npm run smoke:package` correctos. Los dos E2E de regresión del foco fallan con la versión anterior del hook y pasan con la corregida.
