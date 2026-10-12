@@ -7,6 +7,62 @@ import { resolveWikiLink } from '../src/editor/wikilinks';
 import { VaultService } from '../electron/storage';
 
 describe('rewriteWikiLinks', () => {
+  it('keeps the escaped alias pipe of links inside Markdown tables (CR01)', () => {
+    const paths = ['Tabla.md', 'Nota.md'];
+    const moves = new Map([['Nota.md', 'Otra.md']]);
+    expect(rewriteWikiLinks('| a | [[Nota\\|alias]] |\n| b | [[Nota#Parte\\|alias]] |', 'Tabla.md', 'Tabla.md', paths, moves))
+      .toBe('| a | [[/Otra\\|alias]] |\n| b | [[/Otra#Parte\\|alias]] |');
+    // Outside tables the backslash is kept as well: every byte but the path stays as written.
+    expect(rewriteWikiLinks('[[Nota\\|alias]] [[Nota|alias]]', 'Tabla.md', 'Tabla.md', paths, moves)).toBe('[[/Otra\\|alias]] [[/Otra|alias]]');
+  });
+  it('keeps only the escape, not the old name\'s spaces, so the link reaches the moved note', () => {
+    // "Nota .md" (trailing space) is reached by [[Nota \|alias]]; keeping that space would now reach "Otra .md".
+    const paths = ['Tabla.md', 'Nota .md', 'Otra .md'];
+    const rewritten = rewriteWikiLinks('[[Nota \\|alias]]', 'Tabla.md', 'Tabla.md', paths, new Map([['Nota .md', 'Otra.md']]));
+    expect(rewritten).toBe('[[/Otra\\|alias]]');
+    expect(resolveWikiLink(rewritten.slice(2, -2), 'Tabla.md', ['Tabla.md', 'Otra.md', 'Otra .md'])).toBe('Otra.md');
+  });
+  it('keeps an explicit .html through an escaped table pipe when both formats exist', () => {
+    const paths = ['Tabla.md', 'Old/Nota.html', 'Old/Nota.md'];
+    const moves = new Map([['Old/Nota.html', 'ZZ/Old/Nota.html'], ['Old/Nota.md', 'ZZ/Old/Nota.md']]);
+    const rewritten = rewriteWikiLinks('| [[Old/Nota.html\\|HTML]] |', 'Tabla.md', 'Tabla.md', paths, moves);
+    expect(rewritten).toBe('| [[ZZ/Old/Nota.html\\|HTML]] |');
+    // Extra backslashes before the pipe are kept too, and do not hide the extension either.
+    expect(rewriteWikiLinks('[[Old/Nota.html\\\\\\|HTML]]', 'Tabla.md', 'Tabla.md', paths, moves)).toBe('[[ZZ/Old/Nota.html\\\\\\|HTML]]');
+  });
+  it('adapts a copy moved to another folder, keeping links it cannot express as written', () => {
+    const paths = ['Root.md', 'C#/Apuntes #1.md', 'C#/Otra.md'];
+    // C#/Otra cannot be written as a path, but the bare name still reaches it; local headings never change.
+    const copied = rewriteWikiLinks('[[../Root]] [[./Otra#Parte|alias]] [[Root]] [[#Local]]', 'C#/Apuntes #1.md', 'Apuntes 1 copia.md', paths, new Map(), { keepUnreachable: true });
+    expect(copied).toBe('[[/Root]] [[Otra#Parte|alias]] [[Root]] [[#Local]]');
+    // With another Otra winning the bare name there is no way to name it: kept as written, or refused by default.
+    const ambiguous = [...paths, 'A/Otra.md'];
+    expect(rewriteWikiLinks('[[./Otra]]', 'C#/Apuntes #1.md', 'Apuntes 1 copia.md', ambiguous, new Map(), { keepUnreachable: true })).toBe('[[./Otra]]');
+    expect(() => rewriteWikiLinks('[[./Otra]]', 'C#/Apuntes #1.md', 'Apuntes 1 copia.md', ambiguous, new Map())).toThrow('# ^ [ ] |');
+  });
+  it('never keeps a link that would quietly reach another note', () => {
+    // From the root, ./Otra reaches the root Otra.md: keeping it would redirect the link, so the copy is refused.
+    const paths = ['C#/Source.md', 'C#/Otra.md', 'Otra.md'];
+    expect(() => rewriteWikiLinks('[[./Otra#Parte|alias]]', 'C#/Source.md', 'Source copia.md', paths, new Map(), { keepUnreachable: true })).toThrow('# ^ [ ] |');
+  });
+  it('checks a bare-name fallback as written, escape and extension included', () => {
+    // [[./Otra\|alias]] → renaming C#/Otra.md: "Renamed\" reads as a path and would reach the root Renamed.md.
+    const paths = ['C#/Source.md', 'C#/Otra.md', 'Renamed.md'];
+    const moves = new Map([['C#/Otra.md', 'C#/Renamed.md']]);
+    expect(() => rewriteWikiLinks('| [[./Otra\\|alias]] |', 'C#/Source.md', 'C#/Source.md', paths, moves)).toThrow('# ^ [ ] |');
+    // With an A/Otra.md winning the bare name, only "Otra.html" still reaches the HTML note.
+    const html = ['C#/Apuntes.md', 'C#/Otra.html', 'A/Otra.md'];
+    expect(rewriteWikiLinks('[[./Otra#Parte|alias]]', 'C#/Apuntes.md', 'Apuntes copia.md', html, new Map(), { keepUnreachable: true })).toBe('[[Otra.html#Parte|alias]]');
+  });
+  it('never rewrites heading-only links, which always mean the note they are in', () => {
+    // The original folder is gone: [[#Parte]] must keep pointing at the copy itself, not at Old/Source.
+    expect(rewriteWikiLinks('[[#Parte]] [[#Parte|aquí]]', 'Old/Source.md', 'Source copia.md', ['Old/Source.md'], new Map(), { keepUnreachable: true })).toBe('[[#Parte]] [[#Parte|aquí]]');
+  });
+  it('refuses a rewrite whose destination no link can name', () => {
+    const paths = ['Index.md', 'Old/C#/Nota.md', 'Z/Nota.md'];
+    const moves = new Map([['Old/C#/Nota.md', 'ZZ/Old/C#/Nota.md']]);
+    expect(() => rewriteWikiLinks('[[Nota]]', 'Index.md', 'Index.md', paths, moves)).toThrow('# ^ [ ] |');
+  });
   it('preserves aliases, headings, spacing, and explicit extension preference', () => {
     const paths = ['A.md', 'Old/Note.MD'];
     const moves = new Map([['Old/Note.MD', 'New/Changed.MD']]);

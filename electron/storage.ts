@@ -8,7 +8,7 @@ import { isPrivateBytes, parseEnvelope, encryptEnvelope, decryptEnvelope, parseM
 import { rewriteWikiLinks } from '../shared/linkUpdates';
 import { replaceFailure, searchFiles, searchPattern, type ReplaceOutcome, type ReplaceTarget, type SearchOptions, type SearchResult } from '../shared/search';
 import { SEARCH_TOTAL_MS, SearchRunner, SearchTimeoutError, skippable } from './search-runner';
-import { MAX_NOTE_BYTES, counterpartPaths, initialNoteContent, isNotePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
+import { MAX_NOTE_BYTES, NAME_BREAKS_LINKS, counterpartPaths, folderBreaksLinks, initialNoteContent, isNotePath, linkableName, linkablePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
 
 type StorageOptions = {
   trash?: (absolutePath: string) => Promise<void>;
@@ -174,6 +174,12 @@ export class VaultService {
     return current;
   }
 
+  /** A folder that receives new entries: their paths must stay linkable. */
+  private async destination(input: string): Promise<string> {
+    if (!linkablePath(input)) fail(folderBreaksLinks(input));
+    return this.folder(input);
+  }
+
   private async folder(input: string): Promise<string> {
     const absolute = await this.resolve(input, true);
     if (!(await fs.stat(absolute)).isDirectory()) fail('El destino debe ser una carpeta.');
@@ -184,6 +190,7 @@ export class VaultService {
     if (typeof input !== 'string') fail('Nombre no válido.');
     const name = input.trim();
     if (!name || name.startsWith('.') || /[<>:"/\\|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name)) fail('Nombre no válido.');
+    if (!linkablePath(name)) fail(NAME_BREAKS_LINKS);
     const result = note ? withNoteExtension(name, format) : name;
     if (Buffer.byteLength(result, 'utf8') > 240) fail('El nombre es demasiado largo.');
     return result;
@@ -446,7 +453,7 @@ export class VaultService {
   }
   private async privateCopy(parent: string, name: string, content: string, sid: string): Promise<NoteDocument> {
     await this.checkMetadata(); const key = this.requireSession(sid);
-    const folder = await this.folder(parent); const filename = this.name(name, true);
+    const folder = await this.destination(parent); const filename = this.name(name, true);
     const relative = parent ? `${parent}/${filename}` : filename;
     const noteId = randomUUID(); const bytes = encryptEnvelope(key, this.metadata!.vaultId, noteId, content);
     await this.unused(path.join(folder, filename), true); this.requireSession(sid);
@@ -513,7 +520,7 @@ export class VaultService {
     return this.serialized(async () => {
       await this.checkMetadata(); const key = this.requireSession(sid); const draft = this.drafts.get(id); if (!draft) fail('El borrador no existe.');
       const content = decryptEnvelope(key, parseEnvelope(draft.bytes), this.metadata!.vaultId, 'draft');
-      const base = stripNoteExtension(path.posix.basename(draft.path));
+      const base = linkableName(stripNoteExtension(path.posix.basename(draft.path)));
       const result = await this.privateCopy('', withNoteExtension(`${base} recuperado ${randomUUID().slice(0, 8)}`, noteFormat(draft.path) ?? 'md'), content, sid);
       await this.removeDraft(draft); this.requireSession(sid); return result;
     });
@@ -642,7 +649,7 @@ export class VaultService {
   createNote(parent: string, name: string, format: NoteFormat = 'md'): Promise<NoteDocument> {
     return this.serialized(async () => {
       if (format !== 'md' && format !== 'html') fail('Formato de nota no válido.');
-      const folder = await this.folder(parent);
+      const folder = await this.destination(parent);
       const filename = this.name(name, true, format);
       const absolute = path.join(folder, filename);
       await this.unused(absolute, true);
@@ -654,7 +661,7 @@ export class VaultService {
 
   createFolder(parent: string, name: string): Promise<string> {
     return this.serialized(async () => {
-      const folder = await this.folder(parent);
+      const folder = await this.destination(parent);
       const filename = this.name(name);
       await this.unused(path.join(folder, filename));
       await fs.mkdir(path.join(folder, filename));
@@ -668,7 +675,8 @@ export class VaultService {
     const source = await this.resolve(relative);
     const stat = await fs.stat(source);
     if (!stat.isDirectory() && (!stat.isFile() || !isNotePath(relative))) fail('Solo se pueden gestionar notas Markdown, HTML y carpetas.');
-    const folder = await this.folder(destination);
+    // Renaming in place keeps the parent it already had; moving elsewhere needs a linkable destination.
+    const folder = await (destination === path.posix.dirname(relative).replace(/^\.$/, '') ? this.folder(destination) : this.destination(destination));
     const format = noteFormat(relative) ?? 'md';
     const filename = name === undefined ? path.basename(source) : this.name(name, stat.isFile(), format);
     if (stat.isFile() && noteFormat(filename) !== format) fail('No se puede cambiar el formato de una nota al renombrarla.');

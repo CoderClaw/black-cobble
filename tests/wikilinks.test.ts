@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseWikiLink, resolveWikiLink, wikiLinkLabelRange, wikiTargetFor } from '../src/editor/wikilinks';
+import { linkableName, linkablePath } from '../shared/notes';
 
 describe('wiki link parsing', () => {
   it('extracts path, heading, and alias without losing spaces', () => {
@@ -115,5 +116,17 @@ describe('case-variant duplicates (case-sensitive filesystems)', () => {
     for (const source of ['Inicio.md', 'Carpeta/Actual.md', 'carpeta/actual.md'])
       for (const order of permutations(paths))
         for (const note of paths) expect(resolveWikiLink(wikiTargetFor(note, source, order), source, order), `${note} from ${source}`).toBe(note);
+  });
+});
+
+describe('names derived from notes other tools created', () => {
+  it('drop # ^ [ ] | and leading dots, and never come out empty (copies and recovered drafts)', () => {
+    expect(linkableName('C# básico')).toBe('C básico');
+    expect(linkableName('x[1]')).toBe('x 1');
+    expect(linkableName('a^b|c')).toBe('a b c');
+    expect(linkableName('#.oculta')).toBe('oculta');
+    expect(linkableName('###')).toBe('Nota');
+    expect(linkableName('Normal')).toBe('Normal');
+    for (const name of ['C# básico', 'x[1]', '#.oculta', '###', '. #']) expect(linkablePath(linkableName(name))).toBe(true);
   });
 });

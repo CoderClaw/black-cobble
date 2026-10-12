@@ -7,7 +7,7 @@ import { decryptEnvelope, encryptEnvelope, MAX_PRIVATE_BYTES, parseEnvelope, par
 import { rewriteWikiLinks } from '../shared/linkUpdates';
 import { SEARCH_TOTAL_MS, SearchRunner, SearchTimeoutError, skippable } from './search-runner';
 import { replaceFailure, searchFiles, searchPattern, type ReplaceEdit, type ReplaceOutcome, type ReplaceTarget, type SearchOptions, type SearchResult } from '../shared/search';
-import { counterpartPaths, initialNoteContent, isNotePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
+import { NAME_BREAKS_LINKS, counterpartPaths, folderBreaksLinks, initialNoteContent, isNotePath, linkableName, linkablePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
 import type { NoteDocument, PrivateDraftInfo, PrivateSessionStatus, VaultEntry, VaultInfo } from '../shared/types';
 
 export const PRIVATE_CHILD = '.black-cobble-private';
@@ -35,6 +35,8 @@ function name(value: string, note = false, format: NoteFormat = 'md'): string {
   if (typeof value !== 'string') fail('Nombre no válido.');
   let result = relative(value.trim());
   if (result.includes('/') || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(result)) fail('Nombre no válido.');
+  // Checked on new names only: existing snapshots keep validating as before.
+  if (!linkablePath(result)) fail(NAME_BREAKS_LINKS);
   if (note) result = withNoteExtension(result, format);
   if (Buffer.byteLength(result) > 240) fail('El nombre es demasiado largo.');
   return result;
@@ -260,6 +262,8 @@ export class EncryptedVault {
   private note(state: Snapshot, input: string): Note { relative(input); const note = state.notes.find(item => item.path === input); if (!note) fail('CONFLICT: La nota no existe o se ha movido.'); return note; }
   private document(note: Note, id = this.sid!): NoteDocument { return { path: note.path, content: note.content, version: noteVersion(note), encrypted: true, locked: false, sessionId: id }; }
   private folder(state: Snapshot, input: string): void { relative(input, true); if (input && !state.folders.includes(input)) fail('La carpeta de destino no existe.'); }
+  /** A folder that receives new entries: their paths must stay linkable. */
+  private destination(state: Snapshot, input: string): void { this.folder(state, input); if (!linkablePath(input)) fail(folderBreaksLinks(input)); }
   private unused(state: Snapshot, input: string, except?: string, note = false): void {
     const taken = (candidate: string) => [...state.folders, ...state.notes.map(item => item.path)].some(item => item !== except && item.toLowerCase() === candidate.toLowerCase());
     if (taken(input)) fail('Ya existe una nota o carpeta con ese nombre.');
@@ -330,17 +334,18 @@ export class EncryptedVault {
     });
   }
   private text(content: string): void { if (typeof content !== 'string' || Buffer.from(content).toString('utf8') !== content) fail('El texto contiene caracteres no válidos.'); }
-  private addNote(state: Snapshot, parent: string, title: string, content: string): Note { this.folder(state, parent); this.text(content); const filename = name(title, true); const input = parent ? `${parent}/${filename}` : filename; this.unused(state, input, undefined, true); const note = { id: randomUUID(), path: input, content, revision: 0 }; state.notes.push(note); return note; }
+  private addNote(state: Snapshot, parent: string, title: string, content: string): Note { this.destination(state, parent); this.text(content); const filename = name(title, true); const input = parent ? `${parent}/${filename}` : filename; this.unused(state, input, undefined, true); const note = { id: randomUUID(), path: input, content, revision: 0 }; state.notes.push(note); return note; }
   createNote(parent: string, title: string, format: NoteFormat = 'md'): Promise<NoteDocument> {
     if (format !== 'md' && format !== 'html') return Promise.reject(new Error('Formato de nota no válido.'));
     const id = this.sid;
     return this.mutate(id, state => { const filename = name(title, true, format); return this.document(this.addNote(state, parent, filename, initialNoteContent(filename)), id!); });
   }
   createPrivateCopy(parent: string, title: string, content: string, id: string): Promise<NoteDocument> { return this.mutate(id, state => this.document(this.addNote(state, parent, title, content), id)); }
-  createFolder(parent: string, title: string): Promise<string> { return this.mutate(this.sid, state => { this.folder(state, parent); const input = parent ? `${parent}/${name(title)}` : name(title); this.unused(state, input); state.folders.push(input); return input; }); }
+  createFolder(parent: string, title: string): Promise<string> { return this.mutate(this.sid, state => { this.destination(state, parent); const input = parent ? `${parent}/${name(title)}` : name(title); this.unused(state, input); state.folders.push(input); return input; }); }
   private relocate(input: string, parent: string, title?: string): Promise<string> {
     return this.mutate(this.sid, state => {
-      relative(input); this.folder(state, parent); const isFolder = state.folders.includes(input); if (!isFolder) this.note(state, input);
+      // Renaming in place keeps the parent it already had; moving elsewhere needs a linkable destination.
+      relative(input); if (parent === (path.posix.dirname(input) === '.' ? '' : path.posix.dirname(input))) this.folder(state, parent); else this.destination(state, parent); const isFolder = state.folders.includes(input); if (!isFolder) this.note(state, input);
       const filename = title === undefined ? path.posix.basename(input) : name(title, !isFolder, noteFormat(input) ?? 'md'); const target = parent ? `${parent}/${filename}` : filename;
       if (!isFolder && noteFormat(filename) !== noteFormat(input)) fail('No se puede cambiar el formato de una nota al renombrarla.');
       if (target === input) return input; if (isFolder && (target.startsWith(`${input}/`) || parent === input)) fail('No puedes mover una carpeta dentro de sí misma.'); this.unused(state, target, input, !isFolder);
@@ -371,7 +376,7 @@ export class EncryptedVault {
   }
   listPrivateDrafts(id: string): Promise<PrivateDraftInfo[]> { return this.queue(async () => (await this.view(id)).drafts.map(draft => ({ id: draft.id, path: draft.path, updatedAt: draft.updatedAt }))); }
   discardPrivateDraft(input: string, id: string): Promise<void> { return this.mutate(id, state => { if (!state.drafts.some(draft => draft.id === input)) fail('El borrador no existe.'); state.drafts = state.drafts.filter(draft => draft.id !== input); }); }
-  recoverPrivateDraft(input: string, id: string): Promise<NoteDocument> { return this.mutate(id, state => { const draft = state.drafts.find(item => item.id === input); if (!draft) fail('El borrador no existe.'); const note = this.addNote(state, '', withNoteExtension(`${stripNoteExtension(path.posix.basename(draft.path))} recuperado ${randomUUID().slice(0, 8)}`, noteFormat(draft.path) ?? 'md'), draft.content); state.drafts = state.drafts.filter(item => item.id !== input); return this.document(note, id); }); }
+  recoverPrivateDraft(input: string, id: string): Promise<NoteDocument> { return this.mutate(id, state => { const draft = state.drafts.find(item => item.id === input); if (!draft) fail('El borrador no existe.'); const note = this.addNote(state, '', withNoteExtension(`${linkableName(stripNoteExtension(path.posix.basename(draft.path)))} recuperado ${randomUUID().slice(0, 8)}`, noteFormat(draft.path) ?? 'md'), draft.content); state.drafts = state.drafts.filter(item => item.id !== input); return this.document(note, id); }); }
   private async preserveRecovery(bytes: Buffer): Promise<void> {
     await this.directory(); const filename = `recovery-${randomUUID()}.sealed`; const target = path.join(this.root, PRIVATE_CHILD, filename); const temp = path.join(this.root, PRIVATE_CHILD, `.sealed-${randomUUID()}.tmp`);
     try { const file = await fs.open(temp, 'wx', 0o600); try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); } await this.directory(); await fs.link(temp, target); this.recoveryFiles.push(filename); if (this.pending === bytes) { this.pending = undefined; this.recoveryCount = Math.max(1, this.recoveryCount); } this.changed(); }

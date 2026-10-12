@@ -9,7 +9,7 @@ import { syntaxHighlighting, HighlightStyle, indentOnInput, ensureSyntaxTree, sy
 import { autocompletion, closeCompletion, completionKeymap, type CompletionContext, type Completion } from '@codemirror/autocomplete';
 import { isCodePosition, livePreview, previewOptions } from './livePreview';
 import { headingKey, parseWikiLink, wikiTargetFor } from './wikilinks';
-import { linkTargetFor } from '../../shared/notes';
+import { linkTargetFor, linkablePath } from '../../shared/notes';
 import type { SearchOptions } from '../../shared/search';
 import './editor.css';
 
@@ -44,7 +44,8 @@ export function wikiCompletions(context: CompletionContext, paths: string[], cur
   if (isCodePosition(context.state, context.pos)) return null;
   const match = context.matchBefore(/\[\[[^\]\n]*/);
   if (!match || /[|#]/.test(match.text)) return null;
-  const options: Completion[] = [...paths].sort().map(path => {
+  // Notes named by other tools with # ^ [ ] | cannot be linked: offering them would write a link to another note.
+  const options: Completion[] = paths.filter(linkablePath).sort().map(path => {
     // HTML targets keep .html: Obsidian only resolves bare names to Markdown notes.
     const label = linkTargetFor(path);
     return {

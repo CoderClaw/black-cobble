@@ -30,6 +30,20 @@ export function counterpartPaths(path: string): string[] {
   return NOTE_FORMATS.filter(other => other !== format).map(other => `${stem}${NOTE_EXTENSIONS[other]}`);
 }
 
+/** A wikilink cannot carry these in its path: they start a heading, block, alias or the link syntax itself. */
+const LINK_SYNTAX = /[#^[\]|]/;
+export const NAME_BREAKS_LINKS = 'El nombre no puede contener # ^ [ ] |: rompen los enlaces a la nota.';
+
+/** Whether a note or folder path can be written as a wikilink at all (names from other tools may not). */
+export function linkablePath(path: string): boolean { return !LINK_SYNTAX.test(path); }
+
+export const folderBreaksLinks = (folder: string) => `La carpeta «${folder}» contiene # ^ [ ] |, que rompen los enlaces: cámbiale el nombre antes de crear o mover notas dentro.`;
+
+/** A name derived from another one (a copy, a recovered draft) that new names accept: without # ^ [ ] | or leading dots. */
+export function linkableName(stem: string): string {
+  return stem.replace(/\s*[#^[\]|]+\s*/g, ' ').replace(/^[\s.]+|[\s.]+$/g, '') || 'Nota';
+}
+
 /** Target written for a completed link: Markdown drops .md, HTML notes keep .html so Obsidian still resolves them. */
 export function linkTargetFor(path: string): string {
   const normalized = path.replace(/\\/g, '/');

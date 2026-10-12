@@ -5,7 +5,8 @@ import type { ReplaceOutcome, ReplaceTarget, SearchMatch, SearchOptions } from '
 import MarkdownEditor, { type SearchReveal } from './editor/MarkdownEditor';
 import HtmlEditor from './editor/HtmlEditor';
 import { htmlText } from './editor/htmlDocument';
-import { NOTE_EXTENSIONS, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
+import { NOTE_EXTENSIONS, linkableName, linkablePath, noteFormat, stripNoteExtension, withNoteExtension, type NoteFormat } from '../shared/notes';
+import { rewriteWikiLinks } from '../shared/linkUpdates';
 import { parseWikiLink, resolveWikiLink } from './editor/wikilinks';
 import FileTree from './components/FileTree';
 import ContextMenu from './components/ContextMenu';
@@ -715,27 +716,38 @@ export default function App() {
       const request = capture();
       const tree = flattenEntries(await window.vault.listEntries());
       const parent = parentPath(current.path);
-      const destination = !parent || tree.some(entry => entry.path === parent && entry.type === 'folder') ? parent : '';
-      const name = stripNoteExtension(baseName(current.path));
+      // A folder other tools named with # ^ [ ] | accepts no new notes: the copy then goes to the vault root.
+      const destination = !parent || (linkablePath(parent) && tree.some(entry => entry.path === parent && entry.type === 'folder')) ? parent : '';
+      // Names from other tools may hold # ^ [ ] |, which new names reject because they break links.
+      const name = linkableName(stripNoteExtension(baseName(current.path)));
       const extension = NOTE_EXTENSIONS[noteFormat(current.path) ?? 'md'];
       // A copy may not share its name with a note in the other format either.
       const taken = (candidate: string) => tree.some(entry => stripNoteExtension(entry.path).toLocaleLowerCase() === stripNoteExtension((destination ? `${destination}/` : '') + candidate).toLocaleLowerCase());
       let copyName = `${name} copia${extension}`; let count = 2;
       while (taken(copyName)) copyName = `${name} copia ${count++}${extension}`;
       if (!valid(request)) return;
+      // A copy in another folder keeps where its links point; links to unlinkable paths stay as written.
+      const copyPath = destination ? `${destination}/${copyName}` : copyName;
+      const paths = tree.filter(entry => entry.type === 'file').map(entry => entry.path);
+      const adapt = (text: string) => destination === parent ? text : rewriteWikiLinks(text, current.path, copyPath, paths, new Map(), { keepUnreachable: true });
       let saved: NoteDocument;
       let content = noteRef.current?.content ?? current.content;
       if (current.encrypted) {
         if (!request.sessionId) return;
-        saved = await window.vault.createPrivateCopy(destination, copyName, content, request.sessionId);
+        saved = await window.vault.createPrivateCopy(destination, copyName, adapt(content), request.sessionId);
       } else {
+        // Adapt first: a link that cannot be kept refuses the copy before an empty note is created.
+        let adapted = adapt(content);
         const copy = await window.vault.createNote(destination, copyName);
         saved = copy;
-        do {
+        for (;;) {
           if (!valid(request)) return;
-          content = noteRef.current?.content ?? content;
-          saved = await window.vault.writeNote(copy.path, content, saved.version);
-        } while (valid(request) && noteRef.current?.path === current.path && noteRef.current.content !== content);
+          saved = await window.vault.writeNote(copy.path, adapted, saved.version);
+          if (!valid(request) || noteRef.current?.path !== current.path || noteRef.current.content === content) break;
+          // Text typed meanwhile follows; if it cannot be adapted it stays in the editor and the copy keeps the last valid text.
+          content = noteRef.current.content;
+          adapted = adapt(content);
+        }
       }
       if (!valid(request)) return;
       updateNote({ ...saved, savedContent: saved.content, conflict: false }); setSelected(saved.path); setSaveError(false);
