@@ -101,6 +101,18 @@ app.setName('Bóveda');
 if (!process.env.BOVEDA_USER_DATA) app.setPath('userData', app.getPath('userData'));
 app.setName('Black Cobble');
 app.enableSandbox();
+// One process per profile. Two instances on the same private vault could both confirm a save and lose one of
+// them, because checking the version and replacing the file is not atomic across processes. A second launch
+// hands over to the running window instead. The lock follows userData, so it must be taken after setPath.
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
+let started = false;
+app.on('second-instance', () => {
+  // On macOS the process outlives its window: reopen it, as activate does. During startup the window is on its way.
+  if (!window || window.isDestroyed()) { if (started && !recreating && BrowserWindow.getAllWindows().length === 0) void createWindow(); return; }
+  if (window.isMinimized()) window.restore();
+  window.show(); window.focus();
+});
 
 function settingsPath(): string { return path.join(app.getPath('userData'), 'settings.json'); }
 
@@ -455,9 +467,11 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  if (!primaryInstance) return;
   handlers();
   await restoreVault();
   await createWindow();
+  started = true;
   powerMonitor.on('resume', () => inactivity.check());
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow(); });
 }).catch(error => {
