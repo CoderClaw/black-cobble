@@ -118,12 +118,27 @@ export class EncryptedVault {
     this.root = await fs.realpath(this.root);
     try { const bytes = await this.bytes(); this.container = decode(bytes); this.metadata = this.container.metadata; this.diskVersion = hash(bytes); this.durable = bytes; }
     catch (error) { if (!missing(error)) this.error = 'La bóveda privada está dañada o no está disponible. Conserva .black-cobble-private y restaura una copia de seguridad.'; }
-    try { await this.directory(); this.recoveryFiles = (await fs.readdir(path.join(this.root, PRIVATE_CHILD))).filter(file => /^recovery-[0-9a-f-]+\.sealed$/.test(file)); this.recoveryCount = this.recoveryFiles.length; } catch { /* Missing/corrupt storage is handled above. */ }
+    try { this.recoveryFiles = await this.listRecovery(); this.recoveryCount = this.recoveryFiles.length; } catch { /* Missing/corrupt storage is handled above. */ }
     if (this.options.watch !== false) {
       this.watcher = chokidar.watch(path.join(this.root, PRIVATE_CHILD), { ignoreInitial: true, followSymlinks: false });
       this.watcher.on('all', (_event, candidate) => { if (path.resolve(candidate) === this.file && this.metadata) void this.queue(() => this.checkDisk()).catch(() => undefined); });
       this.watcher.on('error', () => { this.error = 'No se puede vigilar la bóveda privada.'; void this.lockPrivateSession(); });
     }
+  }
+  private async listRecovery(): Promise<string[]> { await this.directory(); return (await fs.readdir(path.join(this.root, PRIVATE_CHILD))).filter(file => /^recovery-[0-9a-f-]+\.sealed$/.test(file)); }
+  /**
+   * Every sealed copy of a vault shares its data key; a password change only rewraps it in the main container.
+   * Recovery is opened with the key that container already authenticated, never with the password of the moment.
+   */
+  private async openRecovery(filename: string, key: Buffer, vaultId: string): Promise<Snapshot> {
+    const damaged: () => never = () => fail(`El archivo de recuperación ${filename} está dañado. Consérvalo fuera de la carpeta privada y vuelve a desbloquear.`);
+    const recoveryPath = path.join(this.root, PRIVATE_CHILD, filename); let recovery: Container;
+    try {
+      const stat = await fs.lstat(recoveryPath); if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_VAULT_BYTES * 2) damaged();
+      recovery = decode(await fs.readFile(recoveryPath));
+    } catch { damaged(); }
+    if (recovery.metadata.vaultId !== vaultId) fail('La recuperación cifrada pertenece a otra bóveda. Conserva el archivo y recupéralo en su bóveda original.');
+    try { return snapshot(decryptEnvelope(key, parseEnvelope(Buffer.from(recovery.envelope)), vaultId)); } catch { damaged(); }
   }
   getPrivateSession(): PrivateSessionStatus { return { configured: !!this.metadata, unlocked: !!this.key && !!this.sid, sessionId: this.sid, vaultPath: this.root, recoveryCount: this.recoveryCount, memoryOnlyDrafts: !!this.pending, ...(this.key && this.sid && this.deferredRecovery ? { recoveryPending: this.deferredRecovery } : {}), ...(this.error ? { error: this.error } : {}) }; }
   private encode(state: Snapshot, metadata = this.stagedMetadata ?? this.metadata!, key = this.session()): Buffer {
@@ -190,6 +205,8 @@ export class EncryptedVault {
       if (this.pending) fail('Hay cambios privados sin guardar. Reintenta guardarlos o descártalos antes de desbloquear.');
       await this.checkDisk(); const bytes = await this.bytes(); const container = decode(bytes); const key = await unwrapKey(password, container.metadata);
       try {
+        // Re-read the folder: recovery may have been set aside or added since the vault opened.
+        this.recoveryFiles = await this.listRecovery();
         await this.checkDisk(); if (generation !== this.generation || this.disposed) fail(locked);
         const state = snapshot(decryptEnvelope(key, parseEnvelope(Buffer.from(container.envelope)), container.metadata.vaultId));
         // Renderer revision counters restart for each session.
@@ -204,16 +221,11 @@ export class EncryptedVault {
           state.drafts.push(draft); size += extra; added++; return true;
         };
         for (const filename of this.recoveryFiles) {
-          const recoveryPath = path.join(this.root, PRIVATE_CHILD, filename); const stat = await fs.lstat(recoveryPath);
-          if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_VAULT_BYTES * 2) fail('El archivo de recuperación privada no es válido.');
-          const recovery = decode(await fs.readFile(recoveryPath)); if (recovery.metadata.vaultId !== container.metadata.vaultId) fail('La recuperación cifrada pertenece a otra bóveda. Conserva el archivo y recupéralo en su bóveda original.'); const recoveryKey = await unwrapKey(password, recovery.metadata);
-          try {
-            const saved = snapshot(decryptEnvelope(recoveryKey, parseEnvelope(Buffer.from(recovery.envelope)), recovery.metadata.vaultId));
-            let complete = true;
-            for (const note of saved.notes) if (!state.notes.some(current => current.path === note.path && current.content === note.content) && !state.drafts.some(current => current.path === note.path && current.content === note.content)) complete = add({ id: randomUUID(), path: note.path, content: note.content, expectedVersion: noteVersion(note), revision: 0, updatedAt: Date.now() }) && complete;
-            for (const draft of saved.drafts) if (!state.drafts.some(current => current.path === draft.path && current.content === draft.content)) complete = add({ ...draft, id: randomUUID() }) && complete;
-            if (complete) imported.push(filename);
-          } finally { recoveryKey.fill(0); }
+          const saved = await this.openRecovery(filename, key, container.metadata.vaultId);
+          let complete = true;
+          for (const note of saved.notes) if (!state.notes.some(current => current.path === note.path && current.content === note.content) && !state.drafts.some(current => current.path === note.path && current.content === note.content)) complete = add({ id: randomUUID(), path: note.path, content: note.content, expectedVersion: noteVersion(note), revision: 0, updatedAt: Date.now() }) && complete;
+          for (const draft of saved.drafts) if (!state.drafts.some(current => current.path === draft.path && current.content === draft.content)) complete = add({ ...draft, id: randomUUID() }) && complete;
+          if (complete) imported.push(filename);
         }
         if (generation !== this.generation || this.disposed) fail(locked);
         this.key?.fill(0); this.key = Buffer.from(key); this.state = state; this.sid = randomUUID(); this.stagedMetadata = container.metadata; this.recoveryCount = state.drafts.length; this.durableRecoveryCount = state.drafts.length;

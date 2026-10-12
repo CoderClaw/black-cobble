@@ -196,7 +196,7 @@ No son fallos, sino propuestas que pasan a esta auditoría al cerrarse la anteri
 
 ## Orden de trabajo recomendado
 
-1. **GS01:** descifrar los recovery con la clave autenticada, con una regresión del escenario completo.
+1. ~~**GS01:** descifrar los recovery con la clave autenticada, con una regresión del escenario completo.~~ Hecho en `6eb02e3`.
 2. **GS04:** `requestSingleInstanceLock` en `main.ts`.
 3. **CR01 y CR02:** conservar el escape en tablas y validar los caracteres de los nombres. Son baratos y protegen los enlaces de la bóveda.
 4. **GB01 y GB03:** no volver a ejecutar la regex en el renderer y congelar los destinos confirmados.
@@ -211,6 +211,7 @@ Resueltos hasta ahora:
 
 | ID | Resolución | Commit |
 | --- | --- | --- |
+| GS01 | Corregido. Las recuperaciones se descifran con la clave de datos que ya autenticó el contenedor principal, porque todas las copias selladas de una bóveda la comparten y el cambio de contraseña solo la reenvuelve. Una recuperación dañada se identifica por su nombre, y apartarla basta para desbloquear sin reabrir la app. Hay regresiones para el escenario completo (recuperación pendiente de 9 MiB y cambio de contraseña), para una recuperación anterior al cambio y para archivos alterados o truncados. Lo revisó GPT-6.1 Sol, que encontró dos limitaciones de diagnóstico (RV06 y RV07), ya corregidas. | `6eb02e3` |
 | GS02 | Corregido junto con F02. Renombrar o mover valida cada reescritura con `plainBytes` antes de tocar el disco. | `634e4a6` |
 
 Pendiente para cerrarla: resolver el resto de hallazgos GS, GB y CR y las mejoras heredadas (O03–O08). Cada uno se corrige con su commit, se descarta con motivo o se acepta como riesgo. Después se anota aquí la respuesta final, con fecha y quién la cierra, y se renombra este archivo a `AUDITORIA-2026-10-12-CERRADA.md`.

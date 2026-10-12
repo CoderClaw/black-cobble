@@ -13,7 +13,8 @@ beforeEach(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'whole-p
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(services.splice(0).map(service => service.dispose())); await fs.rm(root, { recursive: true, force: true }); });
 const password = 'synthetic whole vault password';
 async function open() { const status = await vault.setupPrivateSession(password); await vault.selectMode('private'); return status.sessionId!; }
-async function reopen() { await vault.dispose(); vault = new VaultWorkspace(root, { watch: false }); services.push(vault); await vault.initialize(); await vault.selectMode('private'); return (await vault.unlockPrivateSession(password)).sessionId!; }
+async function relaunch() { await vault.dispose(); vault = new VaultWorkspace(root, { watch: false }); services.push(vault); await vault.initialize(); await vault.selectMode('private'); }
+async function reopen(secret = password) { await relaunch(); return (await vault.unlockPrivateSession(secret)).sessionId!; }
 async function allDisk(folder = root): Promise<string> { let result = ''; for (const entry of await fs.readdir(folder, { withFileTypes: true })) { result += entry.name; const file = path.join(folder, entry.name); result += entry.isDirectory() ? await allDisk(file) : await fs.readFile(file, 'utf8'); } return result; }
 function backend(): EncryptedVault { return (vault as unknown as { privateVault: EncryptedVault }).privateVault; }
 
@@ -167,15 +168,63 @@ describe('whole private vault', () => {
     expect((await vault.readNote(note.path)).content).toBe('b'.repeat(9 * MiB));
     expect((await vault.listPrivateDrafts(reopenedId)).length).toBe(1);
 
+    // Changing the password must not strand the pending file, which is still wrapped with the old one (GS01).
+    const changed = 'synthetic password after pending recovery';
+    await vault.changePrivatePassword(password, changed, reopenedId); await vault.lockPrivateSession();
+    await expect(vault.unlockPrivateSession(password)).rejects.toThrow('Contraseña incorrecta');
+    reopenedId = await reopen(changed);
+    expect(vault.getPrivateSession()).toMatchObject({ unlocked: true, recoveryPending: 1 });
+    expect(await recoveryFiles()).toHaveLength(1);
+
     // Once there is room, the next unlock incorporates the rest and only then deletes the file.
     const current = await vault.readNote(note.path); await vault.writeNote(note.path, 'pequeña', current.version, reopenedId);
-    await vault.lockPrivateSession(); reopenedId = (await vault.unlockPrivateSession(password)).sessionId!;
+    await vault.lockPrivateSession(); reopenedId = (await vault.unlockPrivateSession(changed)).sessionId!;
     expect(vault.getPrivateSession().recoveryPending).toBeUndefined();
     expect(await recoveryFiles()).toHaveLength(0);
     const drafts = await vault.listPrivateDrafts(reopenedId); expect(drafts).toHaveLength(2);
     const contents = await Promise.all(drafts.map(async draft => (await vault.recoverPrivateDraft(draft.id, reopenedId)).content.length));
     expect(contents.sort((x, y) => x - y)).toEqual(['borrador'.length, 9 * MiB]);
   }, 120_000);
+  it('opens recovery sealed before a password change with the new password', async () => {
+    const id = await open(); const note = await vault.createNote('', 'Antes del cambio');
+    const before = await vault.writeNote(note.path, 'versión sellada con la contraseña anterior', note.version, id);
+    const stale = await fs.readFile(backend().file);
+    await vault.writeNote(note.path, 'versión actual', before.version, id);
+    const changed = 'synthetic changed password';
+    await vault.changePrivatePassword(password, changed, id);
+    // A recovery copy left behind under the old wrapping, as a conflicting writer would leave it.
+    await fs.writeFile(path.join(root, PRIVATE_CHILD, 'recovery-0a1b2c3d.sealed'), stale);
+    await relaunch();
+    await expect(vault.unlockPrivateSession(password)).rejects.toThrow('Contraseña incorrecta');
+    const unlocked = await reopen(changed);
+    expect(vault.getPrivateSession().recoveryPending).toBeUndefined();
+    expect((await fs.readdir(path.join(root, PRIVATE_CHILD))).some(file => file.startsWith('recovery-'))).toBe(false);
+    expect((await vault.readNote(note.path)).content).toBe('versión actual');
+    const drafts = await vault.listPrivateDrafts(unlocked); expect(drafts).toHaveLength(1);
+    expect((await vault.recoverPrivateDraft(drafts[0].id, unlocked)).content).toBe('versión sellada con la contraseña anterior');
+  });
+  it('names a damaged recovery file instead of reporting a wrong password', async () => {
+    const id = await open(); const note = await vault.createNote('', 'Dañada');
+    const before = await vault.writeNote(note.path, 'contenido sellado', note.version, id);
+    const container = JSON.parse(await fs.readFile(backend().file, 'utf8')) as { envelope: string };
+    await vault.writeNote(note.path, 'contenido actual', before.version, id);
+    // Flip one ciphertext character: the envelope still parses, but authentication fails.
+    const [header, body] = container.envelope.split('\n'); const envelope = JSON.parse(body) as { ciphertext: string };
+    envelope.ciphertext = (envelope.ciphertext[0] === 'A' ? 'B' : 'A') + envelope.ciphertext.slice(1);
+    container.envelope = `${header}\n${JSON.stringify(envelope)}\n`;
+    const tampered = path.join(root, PRIVATE_CHILD, 'recovery-deadbeef.sealed');
+    await fs.writeFile(tampered, JSON.stringify(container));
+    await relaunch();
+    await expect(vault.unlockPrivateSession(password)).rejects.toThrow('recovery-deadbeef.sealed está dañado');
+    expect(vault.getPrivateSession().unlocked).toBe(false);
+    // A truncated or malformed file is named too, not reported as a generic error.
+    await fs.writeFile(tampered, JSON.stringify(container).slice(0, 200));
+    await expect(vault.unlockPrivateSession(password)).rejects.toThrow('recovery-deadbeef.sealed está dañado');
+    // Setting it aside, as the message says, is enough to unlock in the same session.
+    await fs.rename(tampered, path.join(root, 'recovery-deadbeef.sealed'));
+    await vault.unlockPrivateSession(password);
+    expect((await vault.readNote(note.path)).content).toBe('contenido actual');
+  });
   it('rejects cross-vault paths and private tokens on normal writes', async () => {
     const publicNote = await vault.createNote('', 'Public'); const id = await open(); await vault.createNote('', 'Private');
     await vault.selectMode('normal'); expect(vault.getPrivateSession().unlocked).toBe(false);
