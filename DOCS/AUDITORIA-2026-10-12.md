@@ -197,7 +197,7 @@ No son fallos, sino propuestas que pasan a esta auditoría al cerrarse la anteri
 ## Orden de trabajo recomendado
 
 1. ~~**GS01:** descifrar los recovery con la clave autenticada, con una regresión del escenario completo.~~ Hecho en `6eb02e3`.
-2. **GS04:** `requestSingleInstanceLock` en `main.ts`.
+2. ~~**GS04:** `requestSingleInstanceLock` en `main.ts`.~~ Hecho en `88ef450`, con el riesgo entre usuarios y equipos aceptado.
 3. **CR01 y CR02:** conservar el escape en tablas y validar los caracteres de los nombres. Son baratos y protegen los enlaces de la bóveda.
 4. **GB01 y GB03:** no volver a ejecutar la regex en el renderer y congelar los destinos confirmados.
 5. **CR03 (con O01 y O02):** memorizar `notePaths` e indexar la resolución, midiendo antes y después.
@@ -212,6 +212,7 @@ Resueltos hasta ahora:
 | ID | Resolución | Commit |
 | --- | --- | --- |
 | GS01 | Corregido. Las recuperaciones se descifran con la clave de datos que ya autenticó el contenedor principal, porque todas las copias selladas de una bóveda la comparten y el cambio de contraseña solo la reenvuelve. Una recuperación dañada se identifica por su nombre, y apartarla basta para desbloquear sin reabrir la app. Hay regresiones para el escenario completo (recuperación pendiente de 9 MiB y cambio de contraseña), para una recuperación anterior al cambio y para archivos alterados o truncados. Lo revisó GPT-6.1 Sol, que encontró dos limitaciones de diagnóstico (RV06 y RV07), ya corregidas. | `6eb02e3` |
+| GS04 | Corregido para la propia aplicación y aceptado como riesgo entre usuarios o equipos. Black Cobble se ejecuta una sola vez por usuario del sistema: una segunda ejecución sale sin abrir la bóveda y muestra la ventana existente, que vuelve a crear si el proceso sigue vivo sin ventana, como en macOS. GPT-6.1 Sol encontró RV08 (macOS) y RV09 en la revisión. RV08 está corregido. RV09, que dos usuarios o equipos abran la misma bóveda a la vez (por ejemplo, en una carpeta sincronizada), lo aceptó el responsable del proyecto el 12 de octubre de 2026: un bloqueo en disco no sería fiable con carpetas sincronizadas. El riesgo queda documentado en README. Hay E2E de regresión en `tests/e2e/single-instance.spec.ts`. | `88ef450` |
 | GS02 | Corregido junto con F02. Renombrar o mover valida cada reescritura con `plainBytes` antes de tocar el disco. | `634e4a6` |
 
 Pendiente para cerrarla: resolver el resto de hallazgos GS, GB y CR y las mejoras heredadas (O03–O08). Cada uno se corrige con su commit, se descarta con motivo o se acepta como riesgo. Después se anota aquí la respuesta final, con fecha y quién la cierra, y se renombra este archivo a `AUDITORIA-2026-10-12-CERRADA.md`.

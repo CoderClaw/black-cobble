@@ -121,6 +121,6 @@ El cambio de nombre conserva el perfil de Bóveda, las claves de preferencias y 
 - `shared/types.ts`: contrato entre Electron y la interfaz.
 - `PLAN.md`: alcance y reparto del trabajo.
 
-La comprobación de versión reduce los conflictos con otros programas, pero el sistema de archivos no ofrece una operación atómica de comparar versión y reemplazar. Existe un intervalo mínimo entre la última comprobación y el renombrado. No es un editor colaborativo.
+La comprobación de versión reduce los conflictos con otros programas, pero el sistema de archivos no ofrece una operación atómica de comparar versión y reemplazar. Existe un intervalo mínimo entre la última comprobación y el renombrado. No es un editor colaborativo. Black Cobble se ejecuta una sola vez por usuario del sistema: abrirla de nuevo muestra la ventana que ya está abierta. Esa protección no alcanza a otros usuarios ni a otros equipos: no abras la misma bóveda desde dos sitios a la vez, por ejemplo en una carpeta sincronizada, porque un guardado puede sustituir al otro.
 
 Referencias: [aislamiento de contexto en Electron](https://www.electronjs.org/docs/latest/tutorial/context-isolation), [sandbox](https://www.electronjs.org/docs/latest/tutorial/sandbox) y [decoraciones de CodeMirror](https://codemirror.net/examples/decoration/).
