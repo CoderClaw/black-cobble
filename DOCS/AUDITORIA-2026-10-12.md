@@ -198,7 +198,7 @@ No son fallos, sino propuestas que pasan a esta auditoría al cerrarse la anteri
 
 1. ~~**GS01:** descifrar los recovery con la clave autenticada, con una regresión del escenario completo.~~ Hecho en `6eb02e3`.
 2. ~~**GS04:** `requestSingleInstanceLock` en `main.ts`.~~ Hecho en `88ef450`, con el riesgo entre usuarios y equipos aceptado.
-3. **CR01 y CR02:** conservar el escape en tablas y validar los caracteres de los nombres. Son baratos y protegen los enlaces de la bóveda.
+3. ~~**CR01 y CR02:** conservar el escape en tablas y validar los caracteres de los nombres.~~ Hecho en `74f55f6`.
 4. **GB01 y GB03:** no volver a ejecutar la regex en el renderer y congelar los destinos confirmados.
 5. **CR03 (con O01 y O02):** memorizar `notePaths` e indexar la resolución, midiendo antes y después.
 6. **P3, F06, F08 y F09:** agruparlos según el área que se toque.
@@ -212,6 +212,8 @@ Resueltos hasta ahora:
 | ID | Resolución | Commit |
 | --- | --- | --- |
 | GS01 | Corregido. Las recuperaciones se descifran con la clave de datos que ya autenticó el contenedor principal, porque todas las copias selladas de una bóveda la comparten y el cambio de contraseña solo la reenvuelve. Una recuperación dañada se identifica por su nombre, y apartarla basta para desbloquear sin reabrir la app. Hay regresiones para el escenario completo (recuperación pendiente de 9 MiB y cambio de contraseña), para una recuperación anterior al cambio y para archivos alterados o truncados. Lo revisó GPT-6.1 Sol, que encontró dos limitaciones de diagnóstico (RV06 y RV07), ya corregidas. | `6eb02e3` |
+| CR01 | Corregido. La reescritura conserva la barra invertida de `\|` en las tablas (una o varias), y el escape no oculta una extensión `.html` explícita. | `74f55f6` |
+| CR02 | Corregido. Los nombres nuevos rechazan `# ^ [ ] |` en las dos bóvedas, y no se crean entradas dentro de carpetas con esos caracteres. El autocompletado no ofrece rutas que no se pueden enlazar. Una reescritura hacia un destino que no se puede nombrar usa el nombre corto si llega exactamente a esa nota; si no, se rechaza antes de escribir. «Guardar copia» y la recuperación de borradores generan nombres válidos y adaptan los enlaces de la copia. Las notas existentes con esos nombres se siguen leyendo y moviendo. La revisión de GPT-6.1 Sol encontró RV10–RV23, todos corregidos. | `74f55f6` |
 | GS04 | Corregido para la propia aplicación y aceptado como riesgo entre usuarios o equipos. Black Cobble se ejecuta una sola vez por usuario del sistema: una segunda ejecución sale sin abrir la bóveda y muestra la ventana existente, que vuelve a crear si el proceso sigue vivo sin ventana, como en macOS. GPT-6.1 Sol encontró RV08 (macOS) y RV09 en la revisión. RV08 está corregido. RV09, que dos usuarios o equipos abran la misma bóveda a la vez (por ejemplo, en una carpeta sincronizada), lo aceptó el responsable del proyecto el 12 de octubre de 2026: un bloqueo en disco no sería fiable con carpetas sincronizadas. El riesgo queda documentado en README. Hay E2E de regresión en `tests/e2e/single-instance.spec.ts`. | `88ef450` |
 | GS02 | Corregido junto con F02. Renombrar o mover valida cada reescritura con `plainBytes` antes de tocar el disco. | `634e4a6` |
 
