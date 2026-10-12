@@ -19,9 +19,58 @@ class TextWidget extends WidgetType {
   }
 }
 
+// Single image policy for Markdown and HTML notes: only HTTPS and base64 raster data load, which is
+// what the CSP (`img-src 'self' data: https:`) allows. HTTP is rejected explicitly instead of left broken.
+export type ImageSourceStatus = 'allowed' | 'insecure' | 'rejected';
+
+export function imageSourceStatus(source: string): ImageSourceStatus {
+  if (/^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z\d+/=\s]+$/i.test(source)) return 'allowed';
+  try {
+    const protocol = new URL(source).protocol;
+    if (protocol === 'https:') return 'allowed';
+    if (protocol === 'http:') return 'insecure';
+  } catch { /* Not an absolute URL. */ }
+  return 'rejected';
+}
+
 export function safeImageSource(source: string): boolean {
-  if (/^data:image\/(?:png|jpe?g|gif|webp);base64,[a-z\d+/=\s]+$/i.test(source)) return true;
+  return imageSourceStatus(source) === 'allowed';
+}
+
+/** Uses the URL parser, like the browser, so leading spaces or control characters cannot hide a remote source. */
+export function remoteImageSource(source: string): boolean {
   try { return ['https:', 'http:'].includes(new URL(source).protocol); } catch { return false; }
+}
+
+/** Accessible text shown in place of an image that is not loaded. */
+export function blockedImageLabel(source: string, alt: string): string {
+  const reason = imageSourceStatus(source) === 'insecure'
+    ? 'Imagen HTTP no cargada: solo se cargan imágenes HTTPS'
+    : 'Imagen no cargada: origen no admitido';
+  return withAlt(reason, alt);
+}
+
+/** Accessible text for a remote image that the private vault never loads. */
+export function privateImageLabel(alt: string): string {
+  return withAlt('Imagen remota bloqueada en la bóveda privada', alt);
+}
+
+function withAlt(reason: string, alt: string): string {
+  return alt.trim() ? `${reason} (${alt.trim()})` : reason;
+}
+
+class BlockedImageWidget extends WidgetType {
+  constructor(readonly label: string) { super(); }
+  eq(other: BlockedImageWidget) { return this.label === other.label; }
+  toDOM() {
+    const element = document.createElement('span');
+    element.className = 'cm-md-image-blocked';
+    element.setAttribute('role', 'img');
+    element.setAttribute('aria-label', this.label);
+    element.title = this.label;
+    element.textContent = this.label;
+    return element;
+  }
 }
 
 class ImageWidget extends WidgetType {
@@ -151,11 +200,11 @@ export function buildPreview(state: EditorState): DecorationSet {
       if (image && !active(from, to)) {
         const source = image[2].replace(/^<|>$/g, '');
         if (safeImageSource(source)) {
-          if (options.privateMode && /^https?:/i.test(source)) {
+          if (options.privateMode && remoteImageSource(source)) {
             mark(from, to, 'cm-md-link', { 'data-link-target': source });
             if (image[1]) { hide(from, from + 2); hide(from + image[1].length + 2, to); }
           } else decorations.push(Decoration.replace({ widget: new ImageWidget(source, image[1]) }).range(from, to));
-        }
+        } else decorations.push(Decoration.replace({ widget: new BlockedImageWidget(blockedImageLabel(source, image[1])) }).range(from, to));
       }
       return false;
     }

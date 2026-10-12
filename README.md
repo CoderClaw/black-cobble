@@ -84,7 +84,7 @@ Las bóvedas de la versión experimental con cifrado por nota no se migran autom
 
 ## Alcance del editor
 
-Incluye encabezados, negrita, cursiva, tachado, citas, listas, tareas con casillas, código, separadores, enlaces Markdown, wikilinks e imágenes HTTP/HTTPS o datos de imagen. Las notas Markdown permanecen como texto Markdown y nunca se convierten a HTML; las notas HTML se guardan como HTML.
+Incluye encabezados, negrita, cursiva, tachado, citas, listas, tareas con casillas, código, separadores, enlaces Markdown, wikilinks e imágenes HTTPS o datos de imagen (PNG, JPEG, GIF y WebP en base64). Las imágenes HTTP no se cargan: la política de seguridad solo permite HTTPS, así que en Markdown y en HTML se muestra un marcador que lo indica, con el texto alternativo si existe; usa la versión HTTPS de la URL. Las fuentes no admitidas (relativas, `file:`, SVG, etc.) muestran un marcador equivalente. Las notas Markdown permanecen como texto Markdown y nunca se convierten a HTML; las notas HTML se guardan como HTML.
 
 Las tablas tienen formato básico y conservan sus separadores. La carga de imágenes locales, los enlaces Markdown de referencia, embeds de notas, fórmulas, Mermaid y extensiones de Obsidian quedan pendientes. Los enlaces por nombre buscan primero en la carpeta actual; conviene usar rutas completas cuando hay nombres repetidos.
 

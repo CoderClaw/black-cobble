@@ -5,7 +5,8 @@ const MARGIN = 6;
 export default function ContextMenu({ x, y, label, onClose, children }: Props) {
   const menu = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: x, top: y });
-  // Escape and Tab hand focus back to where it was, so keyboard users keep their place in the tree.
+  // Escape, Tab and choosing an item hand focus back to where it was, so keyboard users keep their place in the
+  // tree and a dialog opened by the item can return focus there.
   const opener = useRef(document.activeElement as HTMLElement | null);
   const dismiss = () => { onClose(); opener.current?.focus({ preventScroll: true }); };
   const items = () => [...menu.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []];
@@ -44,5 +45,5 @@ export default function ContextMenu({ x, y, label, onClose, children }: Props) {
   }
   return <div ref={menu} role="menu" aria-label={label} className="entry-menu context-menu" style={position} onKeyDown={keydown}
     onContextMenu={event => event.preventDefault()}
-    onClick={event => { if ((event.target as HTMLElement).closest('[role="menuitem"]')) onClose(); }}>{children}</div>;
+    onClick={event => { if ((event.target as HTMLElement).closest('[role="menuitem"]')) dismiss(); }}>{children}</div>;
 }
